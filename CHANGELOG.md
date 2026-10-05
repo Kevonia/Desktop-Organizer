@@ -12,12 +12,38 @@ moves them under the new version number.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-05
+
+### Added
+
+- **Rules**: e.g. "name contains *invoice* and type is pdf → `Finance/Invoices/{year}`",
+  or "leave these files alone". Conditions: name contains / starts with /
+  matches a pattern, type, size, age. Rules can apply to all folders or one,
+  are checked in order, and show which files they match as you edit them.
+  The preview shows which rule moved each file.
+- **Auto-organize** per folder: when new files arrive, every hour or every
+  day. Files are only moved once they've finished downloading or saving.
+  Every automatic run can be undone like a manual one.
+- **System tray**: closing the window keeps the app running so auto-organize
+  keeps working. Tray menu to open, run now, pause or quit. Notifications
+  after automatic runs.
+- **Start with Windows** (minimized to the tray), in Settings.
+- **Find duplicates**: finds identical files (optionally in subfolders),
+  keeps the oldest copy ticked off, and moves the extra copies to the
+  Recycle Bin so they can be restored.
+- History shows how many files have been organized in total.
+
+### Changed
+
+- Files still downloading (`.crdownload`, `.part`, `.tmp`...) are never moved.
+
 ## [1.0.0] - 2026-10-05
 
 First release as a desktop app. All features are free while licensing is
 being built.
 
 ### Added
+
 - App window: saved folders sidebar, live preview of every move with
   checkboxes and filter, organize in the background with progress.
 - Organize any folder: Desktop, Documents, Downloads, Pictures, Music, Videos
@@ -35,6 +61,7 @@ being built.
 - Windows installer and portable zip.
 
 ### Fixed
+
 - Files on macOS/Linux were filed under the wrong month (used the metadata
   change time instead of the creation/modification date).
 - Shortcuts, hidden/system files and Office lock files are no longer moved.

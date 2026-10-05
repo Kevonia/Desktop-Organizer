@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from desktop_organizer.core.paths import app_data_dir
+from desktop_organizer.core.paths import app_data_dir, same_path
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -108,6 +108,17 @@ class History:
 
     def get_run(self, run_id: int) -> RunInfo | None:
         return next((r for r in self.runs(limit=-1) if r.id == run_id), None)
+
+    def last_run_time(self, folder: Path) -> datetime | None:
+        """When ``folder`` was last organized (manually or automatically)."""
+        return next((r.started_at for r in self.runs(limit=200) if same_path(r.folder, folder)), None)
+
+    def stats(self) -> tuple[int, int]:
+        """(files organized and still in place, runs) across all history."""
+        with closing(self._connect()) as conn:
+            files = conn.execute("SELECT COUNT(*) FROM moves WHERE undone = 0").fetchone()[0]
+            runs = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+        return int(files), int(runs)
 
     def last_undoable_run(self) -> RunInfo | None:
         return next((r for r in self.runs() if r.can_undo), None)

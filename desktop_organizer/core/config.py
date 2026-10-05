@@ -10,6 +10,7 @@ from pathlib import Path
 from desktop_organizer.core.categories import normalize_extension
 from desktop_organizer.core.paths import app_data_dir, display_name, known_folder_key, resolve_folder, same_path
 from desktop_organizer.core.structure import PatternError, validate
+from desktop_organizer.core.user_rules import Rule
 
 
 class SortMode(str, Enum):
@@ -53,6 +54,24 @@ DEFAULT_EXCLUDED_NAMES = ["desktop.ini", "thumbs.db", ".ds_store"]
 THEMES = ("system", "light", "dark")
 
 
+class AutoMode(str, Enum):
+    """When a folder is organized without the user clicking Organize."""
+
+    OFF = "off"
+    WATCH = "watch"    # as soon as new files arrive (and finish downloading)
+    HOURLY = "hourly"
+    DAILY = "daily"
+
+    @property
+    def label(self) -> str:
+        return {
+            AutoMode.OFF: "Off",
+            AutoMode.WATCH: "When new files arrive",
+            AutoMode.HOURLY: "Every hour",
+            AutoMode.DAILY: "Every day",
+        }[self]
+
+
 def describe_pattern(pattern: str) -> str:
     """'Year / Month / File type' for presets, otherwise the pattern itself."""
     for mode in SortMode:
@@ -67,6 +86,7 @@ class FolderProfile:
 
     path: str  # a known name like "downloads", or an absolute path
     pattern: str | None = None  # None means use Settings.pattern
+    auto: AutoMode = AutoMode.OFF
 
     @property
     def location(self) -> Path:
@@ -87,6 +107,10 @@ class Settings:
     excluded_names: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDED_NAMES))
     skip_hidden: bool = True
     theme: str = "system"  # system | light | dark
+    # Checked in order before the folder's structure; the first match wins.
+    rules: list[Rule] = field(default_factory=list)
+    minimize_to_tray: bool = True
+    notifications: bool = True
 
     # --- folders -------------------------------------------------------------
 
@@ -105,6 +129,7 @@ class Settings:
         profile = FolderProfile(stored, validate(pattern) if pattern else None)
         existing = self.find_folder(profile.location)
         if existing:
+            profile.auto = existing.auto
             self.folders[self.folders.index(existing)] = profile
         else:
             self.folders.append(profile)
@@ -152,12 +177,15 @@ class Settings:
     def to_dict(self) -> dict:
         return {
             "pattern": self.pattern,
-            "folders": [{"path": f.path, "pattern": f.pattern} for f in self.folders],
+            "folders": [{"path": f.path, "pattern": f.pattern, "auto": f.auto.value} for f in self.folders],
             "custom_categories": self.custom_categories,
             "excluded_extensions": self.excluded_extensions,
             "excluded_names": self.excluded_names,
             "skip_hidden": self.skip_hidden,
             "theme": self.theme,
+            "rules": [r.to_dict() for r in self.rules],
+            "minimize_to_tray": self.minimize_to_tray,
+            "notifications": self.notifications,
         }
 
     @classmethod
@@ -172,7 +200,9 @@ class Settings:
         folders = []
         for item in data.get("folders", [{"path": "desktop"}]):
             if isinstance(item, dict) and item.get("path"):
-                folders.append(FolderProfile(str(item["path"]), _valid_or_none(item.get("pattern"))))
+                folders.append(FolderProfile(
+                    str(item["path"]), _valid_or_none(item.get("pattern")), _auto_mode(item.get("auto"))
+                ))
         return cls(
             pattern=_valid_or_none(pattern) or defaults.pattern,
             folders=folders,
@@ -185,6 +215,9 @@ class Settings:
             excluded_names=list(data.get("excluded_names", defaults.excluded_names)),
             skip_hidden=bool(data.get("skip_hidden", defaults.skip_hidden)),
             theme=data.get("theme") if data.get("theme") in THEMES else defaults.theme,
+            rules=[Rule.from_dict(r) for r in data.get("rules", []) if isinstance(r, dict)],
+            minimize_to_tray=bool(data.get("minimize_to_tray", defaults.minimize_to_tray)),
+            notifications=bool(data.get("notifications", defaults.notifications)),
         )
 
     @classmethod
@@ -212,3 +245,10 @@ def _valid_or_none(pattern: object) -> str | None:
         return validate(pattern)
     except PatternError:
         return None
+
+
+def _auto_mode(value: object) -> AutoMode:
+    try:
+        return AutoMode(value)
+    except ValueError:
+        return AutoMode.OFF

@@ -1,6 +1,6 @@
 # 🗂️ Desktop Organizer
 
-**Version 1.0.0** · [Changelog](CHANGELOG.md)
+**Version 1.1.0** · [Changelog](CHANGELOG.md)
 
 A Windows desktop app that keeps your Desktop, Downloads, Documents (or any
 folder) tidy by sorting files into folders, in a structure **you** choose.
@@ -15,8 +15,8 @@ Download one of these from a release (or build them yourself, see below):
 
 | File | Use it when |
 | --- | --- |
-| `DesktopOrganizer-1.0.0-Setup.exe` | Normal install. No admin rights needed; adds a Start menu entry and an uninstaller. |
-| `DesktopOrganizer-1.0.0-portable.zip` | No install. Unzip anywhere and run `DesktopOrganizer.exe`. |
+| `DesktopOrganizer-1.1.0-Setup.exe` | Normal install. No admin rights needed; adds a Start menu entry and an uninstaller. |
+| `DesktopOrganizer-1.1.0-portable.zip` | No install. Unzip anywhere and run `DesktopOrganizer.exe`. |
 
 Uninstalling keeps your settings and undo history in
 `%APPDATA%\DesktopOrganizer`, so reinstalling picks up where you left off.
@@ -41,6 +41,20 @@ Uninstalling keeps your settings and undo history in
   | `{day}`          | 05           |                  |             |
 
 - **Your own categories**, e.g. *Invoices = pdf*, used by `{category}`.
+- **Rules** that run before the structure, e.g. "name contains *invoice* and
+  type is pdf → `Finance/Invoices/{year}`", or "leave these files alone".
+  Conditions: name contains / starts with / matches (`IMG_*.jpg`), type,
+  larger/smaller than N MB, older/newer than N days. Match all or any; limit a
+  rule to one folder. The preview's **Rule** column shows which rule applied.
+- **Auto-organize** each folder: *when new files arrive*, *every hour* or
+  *every day*. Files are only moved after they've stopped changing for a few
+  seconds, and in-progress downloads (`.crdownload`, `.part`...) are never
+  moved. Automatic runs show up in History and can be undone.
+- **System tray**: closing the window keeps the app running for auto-organize
+  (Open · Run now · Pause · Quit). Optional notifications and *Start with
+  Windows*.
+- **Find duplicates**: compares file contents (size, then a quick hash, then a
+  full hash), keeps the oldest copy, and moves extras to the **Recycle Bin**.
 - **Undo** any run from History. Folders a run created are removed again and
   files are never overwritten.
 - **Safety**: refuses drive roots, your whole user folder and system folders,
@@ -146,11 +160,17 @@ desktop_organizer/
     mover.py          performs moves and logs them
     history.py        SQLite undo log
     organizer.py      facade used by the UIs
+    user_rules.py     rule conditions and actions
+    auto.py           auto-organize (watch / hourly / daily)
+    duplicates.py     duplicate finder
+    trash.py          send to Recycle Bin / Trash
+    startup.py        start with Windows (registry Run key)
     version.py        parse/compare/bump versions
   ui/                 PySide6 app
     app.py            entry point
-    main_window.py    folders sidebar, preview table, organize/undo
+    main_window.py    folders sidebar, preview, organize/undo, tray, auto-organize
     dialogs.py        structure builder, categories, history, settings
+    tools.py          rules editor, duplicate finder
     theme.py          light/dark theme tokens
     worker.py         background thread for moves
   resources/icon.svg
@@ -176,8 +196,8 @@ to temporary folders.
 ## 🗺️ Roadmap
 
 - [x] 1.0: desktop app, any folder, custom structures, undo, Windows installer
-- [ ] Premium features: auto-organize (folder watching), scheduled runs, rule
-      builder, duplicate finder, run from the tray
+- [x] 1.1: rules, auto-organize (watch / hourly / daily), tray, start with
+      Windows, duplicate finder
 - [ ] Licensing (Free / Premium) and in-app upgrade
 - [ ] Auto-update, code signing, macOS build
 

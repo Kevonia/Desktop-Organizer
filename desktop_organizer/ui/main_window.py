@@ -9,6 +9,7 @@ from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QStackedWidget,
     QStyle,
+    QSystemTrayIcon,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -32,7 +34,8 @@ from PySide6.QtWidgets import (
 
 from desktop_organizer import APP_NAME, __version__
 from desktop_organizer.core import Organizer, PlannedMove
-from desktop_organizer.core.config import FolderProfile
+from desktop_organizer.core.auto import AutoOrganizer
+from desktop_organizer.core.config import AutoMode, FolderProfile
 from desktop_organizer.core.dates import file_date
 from desktop_organizer.core.history import UndoResult
 from desktop_organizer.core.mover import RunResult
@@ -46,11 +49,13 @@ from desktop_organizer.ui.dialogs import (
     StructureCombo,
     section_label,
 )
+from desktop_organizer.ui.tools import DuplicatesDialog, RulesDialog
 from desktop_organizer.ui.worker import Task
 
 MOVE_ROLE = Qt.ItemDataRole.UserRole
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
-COL_FILE, COL_TARGET, COL_SIZE, COL_DATE = range(4)
+COL_FILE, COL_TARGET, COL_SIZE, COL_DATE, COL_RULE = range(5)
+AUTO_CHECK_MS = 30_000
 
 
 class SortableItem(QTreeWidgetItem):
@@ -71,6 +76,11 @@ class MainWindow(QMainWindow):
         self.settings = organizer.settings
         self.moves: list[PlannedMove] = []
         self.task: Task | None = None
+        self.auto = AutoOrganizer(organizer)
+        self.auto_task: Task | None = None
+        self.auto_paused = False
+        self._quitting = False
+        self._told_about_tray = False
 
         self.setWindowTitle(APP_NAME)
         self.resize(1120, 700)
@@ -92,6 +102,20 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self._build_menus()
 
+        # Auto-organize: react to new files in "watch" folders, and check schedules regularly.
+        self.auto_watcher = QFileSystemWatcher(self)
+        self.auto_watcher.directoryChanged.connect(lambda _: self.auto_timer.start())
+        self.auto_timer = QTimer(self)
+        self.auto_timer.setSingleShot(True)
+        self.auto_timer.setInterval(3000)
+        self.auto_timer.timeout.connect(self.run_auto)
+        self.schedule_timer = QTimer(self)
+        self.schedule_timer.setInterval(AUTO_CHECK_MS)
+        self.schedule_timer.timeout.connect(self.run_auto)
+        self.schedule_timer.start()
+        QTimer.singleShot(5000, self.run_auto)
+
+        self.tray = self._build_tray()
         self._reload_folders(select=0)
         self._update_undo()
 
@@ -119,7 +143,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.add_folder_button)
 
         layout.addSpacing(8)
-        for text, slot in (("History", self.show_history), ("Categories", self.show_categories),
+        for text, slot in (("Rules", self.show_rules), ("Find duplicates", self.show_duplicates),
+                           ("History", self.show_history), ("Categories", self.show_categories),
                            ("Settings", self.show_settings)):
             button = QPushButton(text)
             button.clicked.connect(slot)
@@ -162,6 +187,13 @@ class MainWindow(QMainWindow):
         self.structure_combo = StructureCombo(self.organizer, allow_default=True)
         self.structure_combo.patternChosen.connect(self._on_structure_chosen)
         structure_row.addWidget(self.structure_combo)
+        structure_row.addSpacing(16)
+        structure_row.addWidget(QLabel("Auto-organize"))
+        self.auto_combo = QComboBox()
+        for mode in AutoMode:
+            self.auto_combo.addItem(mode.label, mode.value)
+        self.auto_combo.activated.connect(self._on_auto_chosen)
+        structure_row.addWidget(self.auto_combo)
         structure_row.addStretch()
         layout.addLayout(structure_row)
 
@@ -179,7 +211,7 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["File", "Moves to", "Size", "Date used"])
+        self.tree.setHeaderLabels(["File", "Moves to", "Size", "Date used", "Rule"])
         self.tree.setRootIsDecorated(False)
         self.tree.setUniformRowHeights(True)
         self.tree.setAlternatingRowColors(True)
@@ -192,6 +224,7 @@ class MainWindow(QMainWindow):
         header_view.setSectionResizeMode(COL_TARGET, QHeaderView.ResizeMode.Stretch)
         header_view.resizeSection(COL_SIZE, 90)
         header_view.resizeSection(COL_DATE, 110)
+        header_view.resizeSection(COL_RULE, 120)
         self.empty = QLabel()
         self.empty.setObjectName("EmptyState")
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -223,7 +256,7 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         self._action(file_menu, "Choose folder...", self.add_folder_from_dialog, QKeySequence.StandardKey.Open)
         file_menu.addSeparator()
-        self._action(file_menu, "Quit", self.close, QKeySequence.StandardKey.Quit)
+        self._action(file_menu, "Quit", self.quit_app, QKeySequence.StandardKey.Quit)
 
         actions = self.menuBar().addMenu("&Actions")
         self._action(actions, "Refresh preview", self.refresh_preview, QKeySequence.StandardKey.Refresh)
@@ -231,6 +264,8 @@ class MainWindow(QMainWindow):
         self._action(actions, "Undo last run", self.undo_last, QKeySequence.StandardKey.Undo)
 
         tools = self.menuBar().addMenu("&Tools")
+        self._action(tools, "Rules", self.show_rules, QKeySequence("Ctrl+R"))
+        self._action(tools, "Find duplicates", self.show_duplicates, QKeySequence("Ctrl+D"))
         self._action(tools, "History", self.show_history, QKeySequence("Ctrl+H"))
         self._action(tools, "Categories", self.show_categories)
         self._action(tools, "Settings", self.show_settings, QKeySequence.StandardKey.Preferences)
@@ -259,10 +294,12 @@ class MainWindow(QMainWindow):
         self.folder_list.blockSignals(True)
         self.folder_list.clear()
         for profile in self.settings.folders:
-            item = QListWidgetItem(icon, profile.name)
-            item.setToolTip(str(profile.location))
+            auto = profile.auto is not AutoMode.OFF
+            item = QListWidgetItem(icon, f"{profile.name}  (auto)" if auto else profile.name)
+            item.setToolTip(str(profile.location) + (f"\nAuto-organize: {profile.auto.label}" if auto else ""))
             self.folder_list.addItem(item)
         self.folder_list.blockSignals(False)
+        self._update_auto_watcher()
         if self.settings.folders:
             self.folder_list.setCurrentRow(min(max(current, 0), len(self.settings.folders) - 1))
         self._on_folder_selected(self.folder_list.currentRow())
@@ -315,7 +352,8 @@ class MainWindow(QMainWindow):
         for path in self.watcher.directories():
             self.watcher.removePath(path)
         has_folder = profile is not None
-        for widget in (self.structure_combo, self.open_button, self.remove_folder_button, self.refresh_button):
+        for widget in (self.structure_combo, self.auto_combo, self.open_button, self.remove_folder_button,
+                       self.refresh_button):
             widget.setEnabled(has_folder)
         if not has_folder:
             self.title.setText("No folder selected")
@@ -328,6 +366,7 @@ class MainWindow(QMainWindow):
         self.title.setText(profile.name)
         self.path_label.setText(str(folder))
         self.structure_combo.set_pattern(profile.pattern, folder)
+        self.auto_combo.setCurrentIndex(self.auto_combo.findData(profile.auto.value))
         if folder.is_dir():
             self.watcher.addPath(str(folder))
         self.refresh_preview()
@@ -383,6 +422,7 @@ class MainWindow(QMainWindow):
             item.setText(COL_FILE, move.source.name)
             item.setToolTip(COL_FILE, str(move.source))
             item.setText(COL_TARGET, move.relative_target.as_posix() + "/")
+            item.setText(COL_RULE, move.rule or "")
             try:
                 st = move.source.stat()
                 item.setText(COL_SIZE, _format_size(st.st_size))
@@ -458,7 +498,10 @@ class MainWindow(QMainWindow):
     def organize(self) -> None:
         profile = self.current_profile
         moves = self.checked_moves()
-        if profile is None or not moves or self._busy():
+        if profile is None or not moves:
+            return
+        if self._busy():
+            self.statusBar().showMessage("Auto-organize is running. Try again in a moment.", 4000)
             return
         folder = profile.location
         try:
@@ -543,7 +586,7 @@ class MainWindow(QMainWindow):
             on_done(outcome["result"])
 
     def _busy(self) -> bool:
-        return self.task is not None
+        return self.task is not None or self.auto_task is not None
 
     def _set_controls_enabled(self, enabled: bool) -> None:
         for widget in (self.folder_list, self.add_folder_button, self.remove_folder_button,
@@ -572,6 +615,16 @@ class MainWindow(QMainWindow):
             self._start_task(lambda progress: self.organizer.undo(result.run_id),
                              on_done=self._undo_done, label="Undoing")
 
+    def show_rules(self) -> None:
+        folder = self.current_profile.location if self.current_profile else None
+        if RulesDialog(self.organizer, folder, self).exec():
+            self.refresh_preview()
+
+    def show_duplicates(self) -> None:
+        folder = self.current_profile.location if self.current_profile else None
+        DuplicatesDialog(self.organizer, folder, self).exec()
+        self.refresh_preview()
+
     def show_history(self) -> None:
         dialog = HistoryDialog(self.organizer, self)
         dialog.changed.connect(self.refresh_preview)
@@ -594,11 +647,124 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event) -> None:
+        if not self._quitting and self.tray is not None and self.settings.minimize_to_tray:
+            # Keep running in the tray so auto-organize keeps working.
+            event.ignore()
+            self.hide()
+            if not self._told_about_tray and self.settings.notifications:
+                self._told_about_tray = True
+                self.tray.showMessage(APP_NAME, "Still running in the tray. Right-click the icon to quit.",
+                                      QSystemTrayIcon.MessageIcon.Information, 4000)
+            return
         if self._busy():
             QMessageBox.information(self, APP_NAME, "Please wait until the current run finishes.")
             event.ignore()
+            self._quitting = False
             return
+        if self.tray is not None:
+            self.tray.hide()
         super().closeEvent(event)
+        QApplication.quit()
+
+    # --- tray & auto-organize ------------------------------------------------------
+
+    def _build_tray(self) -> QSystemTrayIcon | None:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return None
+        icon = QApplication.windowIcon()
+        if icon.isNull():
+            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        tray = QSystemTrayIcon(icon, self)
+        tray.setToolTip(APP_NAME)
+        menu = QMenu(self)
+        menu.addAction(f"Open {APP_NAME}", self.show_window)
+        menu.addAction("Run auto-organize now", lambda: self.run_auto(force=True))
+        self.pause_action = menu.addAction("Pause auto-organize")
+        self.pause_action.setCheckable(True)
+        self.pause_action.toggled.connect(self._set_paused)
+        menu.addSeparator()
+        menu.addAction("Quit", self.quit_app)
+        tray.setContextMenu(menu)
+        tray.activated.connect(
+            lambda reason: self.show_window() if reason == QSystemTrayIcon.ActivationReason.Trigger else None
+        )
+        tray.messageClicked.connect(self.show_window)
+        tray.show()
+        return tray
+
+    def show_window(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        self.refresh_preview()
+
+    def quit_app(self) -> None:
+        self._quitting = True
+        self.close()
+
+    def _set_paused(self, paused: bool) -> None:
+        self.auto_paused = paused
+        self.statusBar().showMessage("Auto-organize paused." if paused else "Auto-organize resumed.", 4000)
+
+    def _on_auto_chosen(self, index: int) -> None:
+        profile = self.current_profile
+        data = self.auto_combo.itemData(index)
+        if profile is None or data is None:
+            return
+        mode = AutoMode(data)
+        if mode is not AutoMode.OFF and not self._allow_auto(profile):
+            self.auto_combo.setCurrentIndex(self.auto_combo.findData(profile.auto.value))
+            return
+        profile.auto = mode
+        self.settings.save()
+        self._reload_folders()
+        if mode is not AutoMode.OFF:
+            self.statusBar().showMessage(
+                f"{profile.name} will be organized {mode.label.lower()}. Files are moved once they "
+                "finish downloading or saving.", 8000)
+            self.run_auto()
+
+    def _allow_auto(self, profile: FolderProfile) -> bool:
+        try:
+            warnings = self.organizer.check(profile.location)
+        except UnsafeFolderError as exc:
+            QMessageBox.critical(self, "Can't organize this folder", str(exc))
+            return False
+        return not warnings or self.confirm(
+            "Auto-organize this folder?", "\n\n".join(warnings) + "\n\nTurn on auto-organize anyway?"
+        )
+
+    def _update_auto_watcher(self) -> None:
+        if self.auto_watcher.directories():
+            self.auto_watcher.removePaths(self.auto_watcher.directories())
+        for profile in self.settings.folders:
+            if profile.auto is AutoMode.WATCH and profile.location.is_dir():
+                self.auto_watcher.addPath(str(profile.location))
+
+    def run_auto(self, force: bool = False) -> None:
+        if self._busy() or (self.auto_paused and not force) or not self.auto.auto_folders():
+            return
+        self.auto_task = Task(lambda progress: self.auto.run_due(), self)
+        outcome: dict = {}
+        self.auto_task.succeeded.connect(lambda results: outcome.update(results=results))
+        self.auto_task.failed.connect(lambda message: outcome.update(error=message))
+        self.auto_task.finished.connect(lambda: self._auto_finished(outcome))
+        self.auto_task.start()
+
+    def _auto_finished(self, outcome: dict) -> None:
+        self.auto_task = None
+        results = outcome.get("results") or []
+        if not results:
+            return
+        moved = sum(len(r.moved) for _, r in results)
+        where = ", ".join(p.name for p, _ in results)
+        message = f"Moved {moved} file{'s' if moved != 1 else ''} in {where}."
+        self.statusBar().showMessage(message, 8000)
+        if self.tray is not None and self.settings.notifications:
+            self.tray.showMessage(f"{APP_NAME}: auto-organized", message + " Open the app to undo.",
+                                  QSystemTrayIcon.MessageIcon.Information, 5000)
+        self.refresh_preview()
+        self._update_undo()
 
 
 def _format_size(size: int) -> str:

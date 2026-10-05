@@ -10,7 +10,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from desktop_organizer import APP_NAME, __version__
-from desktop_organizer.core import Organizer
+from desktop_organizer.core import Organizer, startup
 from desktop_organizer.ui import theme
 from desktop_organizer.ui.main_window import MainWindow
 
@@ -26,7 +26,11 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, AttributeError):
             pass
 
-    app = QApplication(argv if argv is not None else sys.argv)
+    argv = list(argv if argv is not None else sys.argv)
+    minimized = startup.MINIMIZED_FLAG in argv
+    app = QApplication(argv)
+    # The window may be hidden in the tray; quitting is handled by MainWindow.
+    app.setQuitOnLastWindowClosed(False)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(__version__)
     app.setOrganizationName("DesktopOrganizer")
@@ -40,7 +44,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     window = MainWindow(organizer)
-    window.show()
+    if not (minimized and window.tray is not None):
+        window.show()
     return app.exec()
 
 

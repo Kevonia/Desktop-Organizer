@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from desktop_organizer.core import Organizer, SortMode, rules
+from desktop_organizer.core import Organizer, SortMode, rules, startup
 from desktop_organizer.core.categories import CATEGORIES
 from desktop_organizer.core.config import describe_pattern
 from desktop_organizer.core.structure import TOKENS, PatternError, example, validate
@@ -251,6 +251,9 @@ class HistoryDialog(QDialog):
         self.organizer = organizer
 
         layout = QVBoxLayout(self)
+        self.stats = QLabel()
+        self.stats.setObjectName("Muted")
+        layout.addWidget(self.stats)
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["When", "Folder", "Structure", "Files", "Status"])
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -274,6 +277,9 @@ class HistoryDialog(QDialog):
 
     def _load(self) -> None:
         self.runs = self.organizer.history.runs(limit=200)
+        files, runs = self.organizer.history.stats()
+        self.stats.setText(f"{files} file{'s' if files != 1 else ''} organized in {runs} "
+                           f"run{'s' if runs != 1 else ''} so far.")
         self.table.setRowCount(len(self.runs))
         for i, run in enumerate(self.runs):
             status = "Undone" if run.undone_at else ("Can undo" if run.can_undo else "-")
@@ -344,6 +350,18 @@ class SettingsDialog(QDialog):
         self.excluded_names = QLineEdit(", ".join(settings.excluded_names))
         form.addRow("Never move files named", self.excluded_names)
 
+        self.tray = QCheckBox("Keep running in the system tray when the window is closed")
+        self.tray.setToolTip("Needed for auto-organize to keep working after you close the window.")
+        self.tray.setChecked(settings.minimize_to_tray)
+        form.addRow("Background", self.tray)
+        self.notifications = QCheckBox("Show a notification after auto-organizing")
+        self.notifications.setChecked(settings.notifications)
+        form.addRow("", self.notifications)
+        self.start_with_windows = QCheckBox("Start when I sign in to Windows (in the tray)")
+        self.start_with_windows.setChecked(startup.is_enabled())
+        self.start_with_windows.setVisible(startup.is_supported())
+        form.addRow("", self.start_with_windows)
+
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -358,7 +376,14 @@ class SettingsDialog(QDialog):
         settings.skip_hidden = self.skip_hidden.isChecked()
         settings.excluded_extensions = _split(self.excluded_exts.text())
         settings.excluded_names = _split(self.excluded_names.text())
+        settings.minimize_to_tray = self.tray.isChecked()
+        settings.notifications = self.notifications.isChecked()
         settings.save()
+        if startup.is_supported() and self.start_with_windows.isChecked() != startup.is_enabled():
+            try:
+                startup.set_enabled(self.start_with_windows.isChecked())
+            except OSError as exc:
+                QMessageBox.warning(self, "Start with Windows", f"Couldn't change this setting: {exc}")
         self.accept()
 
 

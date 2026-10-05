@@ -7,6 +7,9 @@ from pathlib import Path
 
 from desktop_organizer.core.config import Settings
 
+# Browsers and download managers write to these until the download finishes.
+IN_PROGRESS_EXTENSIONS = {".crdownload", ".part", ".partial", ".download", ".opdownload", ".tmp", ".!ut", ".!qb"}
+
 _WINDOWS_HIDDEN = getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 0x2) | getattr(stat, "FILE_ATTRIBUTE_SYSTEM", 0x4)
 
 
@@ -32,6 +35,8 @@ def is_skipped(path: Path, settings: Settings) -> bool:
     name = path.name
     # Office lock files (~$report.docx) belong to an open document.
     if name.startswith("~$"):
+        return True
+    if path.suffix.lower() in IN_PROGRESS_EXTENSIONS:
         return True
     if settings.is_name_excluded(path) or settings.is_extension_excluded(path):
         return True
