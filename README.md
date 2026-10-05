@@ -1,120 +1,102 @@
-# 🗂️ Desktop File Organizer
+# 🗂️ Desktop Organizer
 
-A Python script that automatically organizes your desktop files into
-structured folders by **Year → Month → File Type**.
-
-This helps keep your desktop clean and makes it easier to find files
-later.
-
-------------------------------------------------------------------------
+A desktop app that keeps your Desktop, Downloads, Documents (or any folder)
+tidy by sorting files into folders, in a structure **you** choose. Every run
+can be undone.
 
 ## 🚀 Features
 
--   Organizes files into folders by:
+- **App window** with a live preview of every move. Untick files to leave them,
+  filter the list, then organize. Light and dark themes.
+- **Any folder**: Desktop, Documents, Downloads, Pictures, Music, Videos or one
+  you pick. Each folder can have its own structure.
+- **Ready-made structures**: File type · Category · Year / Month ·
+  Year / Month / File type · Year / Month / Category.
+- **Build your own structure** from placeholders, e.g. `Work/{category}/{year}`:
 
-        Year / Month / FileType /
+  | Placeholder      | Example      | Placeholder     | Example     |
+  |------------------|--------------|-----------------|-------------|
+  | `{year}`         | 2025         | `{quarter}`     | Q1          |
+  | `{month}`        | 01-January   | `{type}`        | pdf         |
+  | `{month_num}`    | 01           | `{category}`    | Documents   |
+  | `{month_name}`   | January      | `{size}`        | Small       |
+  | `{month_short}`  | Jan          | `{first_letter}`| R           |
+  | `{day}`          | 05           |                 |             |
 
-    Example:
+- **Your own categories**, e.g. *Invoices = pdf*, used by `{category}`.
+- **Undo** any run from History. Folders a run created are removed again and
+  files are never overwritten.
+- **Safety**: refuses drive roots, your whole user folder and system folders,
+  and warns before touching code/Docker projects (folders containing `.git`,
+  `Dockerfile`, `package.json`...). Shortcuts, hidden/system files and Office
+  lock files are left alone.
+- Finds the real Desktop/Documents/Downloads even when Windows moves them into OneDrive.
 
-        2025 / 01-January / pdf /
-        2025 / 01-January / jpg /
+## ▶️ Run it
 
--   Handles **duplicate file names** automatically by appending
-    numbers.\
+Requires Python 3.10+.
 
--   Supports **files with no extension** (saved under `no_extension/`).\
-
--   Provides a **preview mode** (dry run) before making changes.\
-
--   Works on **Windows, macOS, and Linux**.
-
-------------------------------------------------------------------------
-
-## 📦 Requirements
-
--   Python **3.7+**\
--   Standard libraries only (`os`, `shutil`, `datetime`, `pathlib`)
-
-No external dependencies required.
-
-------------------------------------------------------------------------
-
-## ⚙️ Installation
-
-1.  Clone or download this repository.\
-2.  Save the script as `desktop_organizer.py`.\
-3.  Make sure Python is installed (`python3 --version`).
-
-------------------------------------------------------------------------
-
-## ▶️ Usage
-
-Run the script in your terminal:
-
-``` bash
-python desktop_organizer.py
+```bash
+pip install -e .[dev]
+python main.py            # opens the app window
 ```
 
-You'll see the following menu:
+### Command line
 
-    Desktop Organizer
-    ==================================================
-    1. Preview organization (dry run)
-    2. Organize files for real
-    3. Exit
+```bash
+python main.py preview downloads
+python main.py organize --all                      # every saved folder
+python main.py organize docs --pattern "{category}/{year}"
+python main.py undo
+python main.py history
+python main.py folders add downloads --mode category
+python main.py structure set --pattern "Work/{category}/{year}"
+python main.py structure tokens
+python main.py categories add Invoices pdf
+python -m desktop_organizer                        # text menu
+```
 
-### 📝 Option 1: Preview (Dry Run)
+Settings (`settings.json`) and the undo log (`history.db`) live in
+`%APPDATA%\DesktopOrganizer` on Windows,
+`~/Library/Application Support/DesktopOrganizer` on macOS and
+`~/.local/share/DesktopOrganizer` on Linux.
 
-Shows how your desktop will be organized without moving any files.
+## 🧱 Project layout
 
-### 📂 Option 2: Organize Files
+```text
+desktop_organizer/
+  cli.py              command line + text menu
+  core/               engine with no UI code (shared by CLI and app)
+    paths.py          Desktop/Downloads/... and app-data locations
+    config.py         settings, saved folders, preset structures
+    structure.py      custom structure patterns and placeholders
+    categories.py     extension -> category map
+    safety.py         forbidden folders and project warnings
+    dates.py          which date a file belongs to
+    scanner.py        which files are eligible
+    rules.py          plans where each file goes
+    mover.py          performs moves and logs them
+    history.py        SQLite undo log
+    organizer.py      facade used by the UIs
+  ui/                 PySide6 app
+    app.py            entry point
+    main_window.py    folders sidebar, preview table, organize/undo
+    dialogs.py        structure builder, categories, history, settings
+    theme.py          light/dark theme tokens
+    worker.py         background thread for moves
+  resources/icon.svg
+tests/                pytest; GUI tests run headless
+```
 
-Moves files into `Year/Month/FileType` folders.\
-- Asks for confirmation before making changes.\
-- Handles duplicate file names by renaming them (e.g., `file_1.pdf`).
+## 🧪 Tests
 
-### ❌ Option 3: Exit
+```bash
+python -m pytest
+```
 
-Quits the program.
-
-------------------------------------------------------------------------
-
-## 📌 Example
-
-Before organization:
-
-    Desktop/
-     ├── resume.pdf
-     ├── photo.jpg
-     ├── notes.txt
-     ├── screenshot.png
-
-After organization:
-
-    Desktop/
-     ├── 2025/
-     │    ├── 01-January/
-     │    │    ├── pdf/
-     │    │    │    └── resume.pdf
-     │    │    ├── jpg/
-     │    │    │    └── photo.jpg
-     │    │    ├── txt/
-     │    │    │    └── notes.txt
-     │    │    ├── png/
-     │    │    │    └── screenshot.png
-
-------------------------------------------------------------------------
-
-## ⚠️ Notes
-
--   Only organizes **files on the desktop**, not subfolders.\
--   Existing files inside the `Year/Month/FileType/` structure won't be
-    moved again.\
--   Safe to re-run multiple times.
-
-------------------------------------------------------------------------
+Tests never touch your real folders: the Desktop, Downloads etc. are redirected
+to temporary folders.
 
 ## 🛠️ License
 
-This project is released under the **MIT License**.\
-Feel free to use and modify it.
+MIT
