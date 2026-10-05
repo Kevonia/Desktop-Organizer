@@ -9,14 +9,29 @@ from desktop_organizer.core.config import FolderProfile, Settings
 from desktop_organizer.core.history import History, UndoResult
 from desktop_organizer.core.logs import log
 from desktop_organizer.core.mover import ProgressCallback, RunResult
-from desktop_organizer.core.paths import desktop_dir
+from desktop_organizer.core.paths import desktop_dir, resolve_folder
 from desktop_organizer.core.rules import PlannedMove
+from desktop_organizer.core.versions import VersionStore
 
 
 class Organizer:
-    def __init__(self, settings: Settings | None = None, history: History | None = None):
+    def __init__(self, settings: Settings | None = None, history: History | None = None,
+                 versions: VersionStore | None = None):
         self.settings = settings or Settings.load()
         self.history = history or History()
+        self._versions = versions
+
+    @property
+    def versions(self) -> VersionStore:
+        """Version history for protected folders, created on first use."""
+        if self._versions is None:
+            self._versions = VersionStore()
+        self._versions.keep = self.settings.versions_to_keep
+        self._versions.max_bytes = self.settings.version_max_mb * 1_000_000
+        return self._versions
+
+    def version_folders(self) -> list[Path]:
+        return [resolve_folder(f) for f in self.settings.version_folders if resolve_folder(f).is_dir()]
 
     def folders(self) -> list[FolderProfile]:
         return list(self.settings.folders)
@@ -48,6 +63,7 @@ class Organizer:
         log.info("Run %d: moved %d file(s) in %s using %s", result.run_id, len(result.moved), folder, pattern)
         for source, reason in result.failed:
             log.warning("Run %d: couldn't move %s: %s", result.run_id, source, reason)
+        self._carry_versions(result.moved)
         return result
 
     def undo(self, run_id: int) -> UndoResult:
@@ -55,7 +71,15 @@ class Organizer:
         log.info("Undo of run %d: restored %d file(s)", run_id, len(result.restored))
         for path, reason in result.failed:
             log.warning("Undo of run %d: couldn't restore %s: %s", run_id, path, reason)
+        self._carry_versions(result.restored)
         return result
+
+    def _carry_versions(self, pairs: list[tuple[Path, Path]]) -> None:
+        """A moved file keeps its saved versions."""
+        if not self.settings.version_folders or not pairs:
+            return
+        for source, destination in pairs:
+            self.versions.moved(source, destination)
 
     def undo_last(self) -> UndoResult | None:
         run = self.history.last_undoable_run()

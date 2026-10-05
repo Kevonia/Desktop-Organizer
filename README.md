@@ -1,6 +1,6 @@
 # 🗂️ Desktop Organizer
 
-**Version 1.2.0** · [Changelog](CHANGELOG.md)
+**Version 1.3.0** · [Changelog](CHANGELOG.md)
 
 A Windows desktop app that keeps your Desktop, Downloads, Documents (or any
 folder) tidy by sorting files into folders, in a structure **you** choose.
@@ -15,8 +15,8 @@ Download one of these from a release (or build them yourself, see below):
 
 | File | Use it when |
 | --- | --- |
-| `DesktopOrganizer-1.2.0-Setup.exe` | Normal install. No admin rights needed; adds a Start menu entry and an uninstaller. |
-| `DesktopOrganizer-1.2.0-portable.zip` | No install. Unzip anywhere and run `DesktopOrganizer.exe`. |
+| `DesktopOrganizer-1.3.0-Setup.exe` | Normal install. No admin rights needed; adds a Start menu entry and an uninstaller. |
+| `DesktopOrganizer-1.3.0-portable.zip` | No install. Unzip anywhere and run `DesktopOrganizer.exe`. |
 
 Uninstalling keeps your settings and undo history in
 `%APPDATA%\DesktopOrganizer`, so reinstalling picks up where you left off.
@@ -62,6 +62,13 @@ Uninstalling keeps your settings and undo history in
   `Dockerfile`, `package.json`...). Shortcuts, hidden/system files and Office
   lock files are left alone.
 - Finds the real Desktop/Documents/Downloads even when Windows moves them into OneDrive.
+- **Find & recover** (Ctrl+F):
+  - *Find a file* — search by name to see where the organizer moved a file,
+    from where and when; open it or show it in File Explorer.
+  - *File versions* — protect folders and keep the last 4 saved versions of
+    every file in them (1–20); restore any version or bring back deleted files.
+  - *Recycle Bin* — list deleted items with their original location and put
+    them back, never overwriting.
 - **One copy at a time**: opening the app again brings the running copy forward.
 - **Updates**: *Help › Check for updates...* looks for a newer release on
   GitHub. A weekly check can be turned on in Settings (off by default — the
@@ -172,6 +179,9 @@ desktop_organizer/
     trash.py          send to Recycle Bin / Trash
     startup.py        start with Windows (registry Run key)
     updates.py        check GitHub Releases for a newer version
+    search.py         find files by name (organizer moves + saved folders)
+    versions.py       version history for protected folders
+    recycle_bin.py    read and restore Windows Recycle Bin items
     logs.py           rotating log file
     version.py        parse/compare/bump versions
   ui/                 PySide6 app
@@ -179,6 +189,7 @@ desktop_organizer/
     main_window.py    folders sidebar, preview, organize/undo, tray, auto-organize
     dialogs.py        structure builder, categories, history, settings
     tools.py          rules editor, duplicate finder
+    recover.py        Find & recover window (find, versions, Recycle Bin)
     theme.py          light/dark theme tokens
     worker.py         background thread for moves
     single_instance.py  one running copy; a second launch shows the first
@@ -227,8 +238,9 @@ to temporary folders.
       Windows, duplicate finder
 - [x] 1.2: one copy at a time, update checker, error log and crash dialog,
       licence notices
-- [ ] 1.3: licensing (Free / Premium) and in-app upgrade
-- [ ] 1.4: code signing, first public GitHub release, website
+- [x] 1.3: Find & recover — file search, version history, Recycle Bin restore
+- [ ] 1.4: licensing (Free / Premium) and in-app upgrade
+- [ ] 1.5: code signing, first public GitHub release, website
 - [ ] 2.x: macOS build, Microsoft Store listing
 
 ## 🛠️ License

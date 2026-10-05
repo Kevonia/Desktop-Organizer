@@ -52,6 +52,7 @@ from desktop_organizer.ui.dialogs import (
     StructureCombo,
     section_label,
 )
+from desktop_organizer.ui.recover import FIND, RECYCLE, VERSIONS, RecoverDialog
 from desktop_organizer.ui.tools import DuplicatesDialog, RulesDialog
 from desktop_organizer.ui.worker import Task
 
@@ -60,6 +61,7 @@ SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 COL_FILE, COL_TARGET, COL_SIZE, COL_DATE, COL_RULE = range(5)
 AUTO_CHECK_MS = 30_000
 UPDATE_CHECK_EVERY = timedelta(days=7)
+VERSION_CHECK_MS = 60_000
 
 
 class SortableItem(QTreeWidgetItem):
@@ -122,6 +124,14 @@ class MainWindow(QMainWindow):
         self.update_task: Task | None = None
         QTimer.singleShot(10_000, self._auto_update_check)
 
+        # File versions: save changed files in protected folders about once a minute.
+        self.version_task: Task | None = None
+        self.version_timer = QTimer(self)
+        self.version_timer.setInterval(VERSION_CHECK_MS)
+        self.version_timer.timeout.connect(self.save_versions)
+        self.version_timer.start()
+        QTimer.singleShot(15_000, self.save_versions)
+
         self.tray = self._build_tray()
         self._reload_folders(select=0)
         self._update_undo()
@@ -150,7 +160,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.add_folder_button)
 
         layout.addSpacing(8)
-        for text, slot in (("Rules", self.show_rules), ("Find duplicates", self.show_duplicates),
+        for text, slot in (("Find & recover", lambda: self.show_recover(FIND)),
+                           ("Rules", self.show_rules), ("Find duplicates", self.show_duplicates),
                            ("History", self.show_history), ("Categories", self.show_categories),
                            ("Settings", self.show_settings)):
             button = QPushButton(text)
@@ -271,6 +282,10 @@ class MainWindow(QMainWindow):
         self._action(actions, "Undo last run", self.undo_last, QKeySequence.StandardKey.Undo)
 
         tools = self.menuBar().addMenu("&Tools")
+        self._action(tools, "Find a file", lambda: self.show_recover(FIND), QKeySequence("Ctrl+F"))
+        self._action(tools, "File versions", lambda: self.show_recover(VERSIONS), QKeySequence("Ctrl+Shift+V"))
+        self._action(tools, "Recover from Recycle Bin", lambda: self.show_recover(RECYCLE))
+        tools.addSeparator()
         self._action(tools, "Rules", self.show_rules, QKeySequence("Ctrl+R"))
         self._action(tools, "Find duplicates", self.show_duplicates, QKeySequence("Ctrl+D"))
         self._action(tools, "History", self.show_history, QKeySequence("Ctrl+H"))
@@ -625,6 +640,23 @@ class MainWindow(QMainWindow):
             self._start_task(lambda progress: self.organizer.undo(result.run_id),
                              on_done=self._undo_done, label="Undoing")
 
+    def show_recover(self, tab: int) -> None:
+        RecoverDialog(self.organizer, tab, self).exec()
+        self.refresh_preview()
+
+    def save_versions(self) -> None:
+        """Background check of protected folders; does nothing until a folder is protected."""
+        folders = self.organizer.version_folders()
+        if not folders or self.version_task is not None:
+            return
+        self.version_task = Task(lambda progress: self.organizer.versions.scan(folders), self)
+        self.version_task.failed.connect(lambda message: log.warning("Saving versions failed: %s", message))
+        self.version_task.finished.connect(self._versions_saved)
+        self.version_task.start()
+
+    def _versions_saved(self) -> None:
+        self.version_task = None
+
     def show_rules(self) -> None:
         folder = self.current_profile.location if self.current_profile else None
         if RulesDialog(self.organizer, folder, self).exec():
@@ -734,6 +766,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             self._quitting = False
             return
+        if self.version_task is not None:
+            self.version_task.wait(10_000)
         if self.tray is not None:
             self.tray.hide()
         super().closeEvent(event)

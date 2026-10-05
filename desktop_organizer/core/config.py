@@ -114,6 +114,10 @@ class Settings:
     # Off by default: the app only goes online when the user asks it to.
     check_updates: bool = False
     last_update_check: str = ""  # ISO timestamp of the last automatic check
+    # Folders whose files get version history (the last few saved copies).
+    version_folders: list[str] = field(default_factory=list)
+    versions_to_keep: int = 4
+    version_max_mb: int = 50
 
     # --- folders -------------------------------------------------------------
 
@@ -191,6 +195,9 @@ class Settings:
             "notifications": self.notifications,
             "check_updates": self.check_updates,
             "last_update_check": self.last_update_check,
+            "version_folders": self.version_folders,
+            "versions_to_keep": self.versions_to_keep,
+            "version_max_mb": self.version_max_mb,
         }
 
     @classmethod
@@ -225,6 +232,9 @@ class Settings:
             notifications=bool(data.get("notifications", defaults.notifications)),
             check_updates=bool(data.get("check_updates", defaults.check_updates)),
             last_update_check=str(data.get("last_update_check", "")),
+            version_folders=[str(f) for f in data.get("version_folders", []) if f],
+            versions_to_keep=_clamp(data.get("versions_to_keep"), 1, 20, defaults.versions_to_keep),
+            version_max_mb=_clamp(data.get("version_max_mb"), 1, 2000, defaults.version_max_mb),
         )
 
     @classmethod
@@ -259,3 +269,10 @@ def _auto_mode(value: object) -> AutoMode:
         return AutoMode(value)
     except ValueError:
         return AutoMode.OFF
+
+
+def _clamp(value: object, low: int, high: int, default: int) -> int:
+    try:
+        return max(low, min(high, int(value)))
+    except (TypeError, ValueError):
+        return default

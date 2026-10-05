@@ -109,6 +109,28 @@ class History:
     def get_run(self, run_id: int) -> RunInfo | None:
         return next((r for r in self.runs(limit=-1) if r.id == run_id), None)
 
+    def find_moves(self, query: str, limit: int = 200) -> list[tuple[Path, Path, datetime, bool]]:
+        """Moves whose file name contains ``query``: (source, destination, when, undone), newest first."""
+        needle = f"%{query.strip()}%"
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                """SELECT m.source, m.destination, m.undone, r.started_at
+                   FROM moves m JOIN runs r ON r.id = m.run_id
+                   WHERE m.destination LIKE ? ORDER BY m.id DESC LIMIT ?""",
+                (needle, limit * 4),
+            ).fetchall()
+        needle_lower = query.strip().lower()
+        results = []
+        for row in rows:
+            destination = Path(row["destination"])
+            # LIKE also matched folder names; keep only file-name matches.
+            if needle_lower in destination.name.lower() or needle_lower in Path(row["source"]).name.lower():
+                results.append((Path(row["source"]), destination,
+                                datetime.fromisoformat(row["started_at"]), bool(row["undone"])))
+            if len(results) >= limit:
+                break
+        return results
+
     def last_run_time(self, folder: Path) -> datetime | None:
         """When ``folder`` was last organized (manually or automatically)."""
         return next((r.started_at for r in self.runs(limit=200) if same_path(r.folder, folder)), None)

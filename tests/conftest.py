@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from desktop_organizer.core import History, Organizer, Settings, paths
+from desktop_organizer.core import History, Organizer, Settings, paths, recycle_bin
 
 
 @pytest.fixture(autouse=True)
@@ -20,6 +20,8 @@ def isolated_data_dir(tmp_path, monkeypatch):
         return path
 
     monkeypatch.setattr(paths, "known_folder", fake_known_folder)
+    # Never list or restore from the real Recycle Bin.
+    monkeypatch.setattr(recycle_bin, "bin_folders", lambda: [])
     monkeypatch.setattr(paths.Path, "home", classmethod(lambda cls: fake_home))
 
 

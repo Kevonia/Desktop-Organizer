@@ -12,6 +12,23 @@ moves them under the new version number.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-05
+
+### Added
+
+- **Find & recover** window (sidebar button, or Ctrl+F) with three tabs:
+  - **Find a file**: type part of a name to see where the organizer moved
+    it, from where and when, plus matches in your saved folders. Open the
+    file or show it in File Explorer.
+  - **File versions**: protect folders and the app keeps the last 4 saved
+    versions of every file in them (1–20, adjustable), checked about once a
+    minute. Restore any version (the current file is saved first, so it can
+    be switched back), save a copy, or bring back a protected file that was
+    deleted. Versions follow files the organizer moves.
+  - **Recycle Bin**: list what's in the Recycle Bin with original location
+    and deletion date, filter, and put items back where they came from.
+    Never overwrites: a clash is restored as `name (recovered 1)`.
+
 ## [1.2.0] - 2026-10-05
 
 ### Added
