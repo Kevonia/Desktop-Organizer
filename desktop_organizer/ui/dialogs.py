@@ -361,6 +361,9 @@ class SettingsDialog(QDialog):
         self.start_with_windows.setChecked(startup.is_enabled())
         self.start_with_windows.setVisible(startup.is_supported())
         form.addRow("", self.start_with_windows)
+        self.check_updates = QCheckBox("Check for updates once a week (contacts GitHub)")
+        self.check_updates.setChecked(settings.check_updates)
+        form.addRow("Updates", self.check_updates)
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
@@ -378,6 +381,7 @@ class SettingsDialog(QDialog):
         settings.excluded_names = _split(self.excluded_names.text())
         settings.minimize_to_tray = self.tray.isChecked()
         settings.notifications = self.notifications.isChecked()
+        settings.check_updates = self.check_updates.isChecked()
         settings.save()
         if startup.is_supported() and self.start_with_windows.isChecked() != startup.is_enabled():
             try:

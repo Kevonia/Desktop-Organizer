@@ -1,6 +1,6 @@
 # 🗂️ Desktop Organizer
 
-**Version 1.1.0** · [Changelog](CHANGELOG.md)
+**Version 1.2.0** · [Changelog](CHANGELOG.md)
 
 A Windows desktop app that keeps your Desktop, Downloads, Documents (or any
 folder) tidy by sorting files into folders, in a structure **you** choose.
@@ -15,8 +15,8 @@ Download one of these from a release (or build them yourself, see below):
 
 | File | Use it when |
 | --- | --- |
-| `DesktopOrganizer-1.1.0-Setup.exe` | Normal install. No admin rights needed; adds a Start menu entry and an uninstaller. |
-| `DesktopOrganizer-1.1.0-portable.zip` | No install. Unzip anywhere and run `DesktopOrganizer.exe`. |
+| `DesktopOrganizer-1.2.0-Setup.exe` | Normal install. No admin rights needed; adds a Start menu entry and an uninstaller. |
+| `DesktopOrganizer-1.2.0-portable.zip` | No install. Unzip anywhere and run `DesktopOrganizer.exe`. |
 
 Uninstalling keeps your settings and undo history in
 `%APPDATA%\DesktopOrganizer`, so reinstalling picks up where you left off.
@@ -62,6 +62,12 @@ Uninstalling keeps your settings and undo history in
   `Dockerfile`, `package.json`...). Shortcuts, hidden/system files and Office
   lock files are left alone.
 - Finds the real Desktop/Documents/Downloads even when Windows moves them into OneDrive.
+- **One copy at a time**: opening the app again brings the running copy forward.
+- **Updates**: *Help › Check for updates...* looks for a newer release on
+  GitHub. A weekly check can be turned on in Settings (off by default — the
+  app never goes online unless asked).
+- **Error log**: runs and problems are logged to `%APPDATA%\DesktopOrganizer\logs`;
+  unexpected errors show a dialog with details to copy instead of closing the app.
 
 ## 🧑‍💻 Run from source
 
@@ -165,6 +171,8 @@ desktop_organizer/
     duplicates.py     duplicate finder
     trash.py          send to Recycle Bin / Trash
     startup.py        start with Windows (registry Run key)
+    updates.py        check GitHub Releases for a newer version
+    logs.py           rotating log file
     version.py        parse/compare/bump versions
   ui/                 PySide6 app
     app.py            entry point
@@ -173,6 +181,8 @@ desktop_organizer/
     tools.py          rules editor, duplicate finder
     theme.py          light/dark theme tokens
     worker.py         background thread for moves
+    single_instance.py  one running copy; a second launch shows the first
+    errors.py         crash dialog and error logging
   resources/icon.svg
 packaging/
   build.py            icon, PyInstaller, zip and installer in one step
@@ -183,6 +193,23 @@ scripts/
 tests/                pytest; GUI tests run headless
 CHANGELOG.md
 ```
+
+## 📚 Documents
+
+- [User guide](docs/user-guide.html) (also `docs/user-guide.docx`)
+- [Project briefing](docs/briefing.html) with SWOT, PESTEL, competitors and
+  roadmap (also `docs/briefing.docx`)
+
+## 🚀 Publishing a release
+
+Update checks read the latest release at
+`https://github.com/Kevonia/Desktop-Organizer/releases`. To publish one:
+
+1. Bump the version, commit and tag (see Versioning above), then build.
+2. `git push origin master --tags`
+3. On GitHub, create a release from the tag (e.g. `v1.2.0`), paste the
+   changelog notes, and attach `DesktopOrganizer-<version>-Setup.exe` and the
+   portable zip. The app links straight to the file ending in `-Setup.exe`.
 
 ## 🧪 Tests
 
@@ -198,8 +225,11 @@ to temporary folders.
 - [x] 1.0: desktop app, any folder, custom structures, undo, Windows installer
 - [x] 1.1: rules, auto-organize (watch / hourly / daily), tray, start with
       Windows, duplicate finder
-- [ ] Licensing (Free / Premium) and in-app upgrade
-- [ ] Auto-update, code signing, macOS build
+- [x] 1.2: one copy at a time, update checker, error log and crash dialog,
+      licence notices
+- [ ] 1.3: licensing (Free / Premium) and in-app upgrade
+- [ ] 1.4: code signing, first public GitHub release, website
+- [ ] 2.x: macOS build, Microsoft Store listing
 
 ## 🛠️ License
 

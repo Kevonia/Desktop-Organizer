@@ -111,6 +111,9 @@ class Settings:
     rules: list[Rule] = field(default_factory=list)
     minimize_to_tray: bool = True
     notifications: bool = True
+    # Off by default: the app only goes online when the user asks it to.
+    check_updates: bool = False
+    last_update_check: str = ""  # ISO timestamp of the last automatic check
 
     # --- folders -------------------------------------------------------------
 
@@ -186,6 +189,8 @@ class Settings:
             "rules": [r.to_dict() for r in self.rules],
             "minimize_to_tray": self.minimize_to_tray,
             "notifications": self.notifications,
+            "check_updates": self.check_updates,
+            "last_update_check": self.last_update_check,
         }
 
     @classmethod
@@ -218,6 +223,8 @@ class Settings:
             rules=[Rule.from_dict(r) for r in data.get("rules", []) if isinstance(r, dict)],
             minimize_to_tray=bool(data.get("minimize_to_tray", defaults.minimize_to_tray)),
             notifications=bool(data.get("notifications", defaults.notifications)),
+            check_updates=bool(data.get("check_updates", defaults.check_updates)),
+            last_update_check=str(data.get("last_update_check", "")),
         )
 
     @classmethod

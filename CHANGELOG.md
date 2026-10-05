@@ -12,6 +12,23 @@ moves them under the new version number.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-05
+
+### Added
+
+- **One copy at a time**: opening the app while it is already running (for
+  example hidden in the tray) brings the existing window forward instead of
+  starting a second copy.
+- **Check for updates** in the Help menu, using GitHub Releases. An optional
+  weekly check can be turned on in Settings; it is off by default, so the
+  app never goes online unless asked.
+- **Log file and error dialog**: runs, undos and problems are written to a
+  small rotating log (`%APPDATA%\DesktopOrganizer\logs`). Unexpected errors
+  show a dialog with *Copy details* and *Open log folder* instead of closing
+  the app. Help › Open log folder opens it any time.
+- **Licence notices** for Qt for Python (LGPL v3) and Python in the About box.
+- Ctrl+Q quits the app.
+
 ## [1.1.0] - 2026-10-05
 
 ### Added

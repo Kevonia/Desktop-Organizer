@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QFileSystemWatcher, Qt, QTimer, QUrl
@@ -38,9 +39,11 @@ from desktop_organizer.core.auto import AutoOrganizer
 from desktop_organizer.core.config import AutoMode, FolderProfile
 from desktop_organizer.core.dates import file_date
 from desktop_organizer.core.history import UndoResult
+from desktop_organizer.core.logs import log, log_dir
 from desktop_organizer.core.mover import RunResult
 from desktop_organizer.core.paths import KNOWN_FOLDERS, known_folder, resolve_folder
 from desktop_organizer.core.safety import UnsafeFolderError
+from desktop_organizer.core.updates import RELEASES_PAGE, UpdateError, UpdateInfo, check_for_update
 from desktop_organizer.ui import theme
 from desktop_organizer.ui.dialogs import (
     CategoriesDialog,
@@ -56,6 +59,7 @@ MOVE_ROLE = Qt.ItemDataRole.UserRole
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 COL_FILE, COL_TARGET, COL_SIZE, COL_DATE, COL_RULE = range(5)
 AUTO_CHECK_MS = 30_000
+UPDATE_CHECK_EVERY = timedelta(days=7)
 
 
 class SortableItem(QTreeWidgetItem):
@@ -114,6 +118,9 @@ class MainWindow(QMainWindow):
         self.schedule_timer.timeout.connect(self.run_auto)
         self.schedule_timer.start()
         QTimer.singleShot(5000, self.run_auto)
+
+        self.update_task: Task | None = None
+        QTimer.singleShot(10_000, self._auto_update_check)
 
         self.tray = self._build_tray()
         self._reload_folders(select=0)
@@ -271,6 +278,9 @@ class MainWindow(QMainWindow):
         self._action(tools, "Settings", self.show_settings, QKeySequence.StandardKey.Preferences)
 
         help_menu = self.menuBar().addMenu("&Help")
+        self._action(help_menu, "Check for updates...", lambda: self.check_updates(quiet=False))
+        self._action(help_menu, "Open log folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_dir()))))
+        help_menu.addSeparator()
         self._action(help_menu, f"About {APP_NAME}", self.show_about)
 
     def _action(self, menu: QMenu, text: str, slot, shortcut=None) -> QAction:
@@ -643,8 +653,71 @@ class MainWindow(QMainWindow):
     def show_about(self) -> None:
         QMessageBox.about(
             self, f"About {APP_NAME}",
-            f"<b>{APP_NAME}</b> {__version__}<br>Keeps your folders tidy. Every run can be undone.",
+            f"<b>{APP_NAME}</b> {__version__}<br>Keeps your folders tidy. Every run can be undone."
+            "<p>Built with <a href='https://www.qt.io/qt-for-python'>Qt for Python (PySide6)</a>, "
+            "used under the <a href='https://www.gnu.org/licenses/lgpl-3.0.html'>GNU LGPL v3</a>; "
+            "its source is available from <a href='https://code.qt.io/'>code.qt.io</a>. "
+            "Includes the <a href='https://www.python.org/'>Python</a> runtime under the "
+            "<a href='https://docs.python.org/3/license.html'>PSF License</a>.</p>",
         )
+
+    # --- updates -----------------------------------------------------------------
+
+    def _auto_update_check(self) -> None:
+        """Weekly background check, only if the user turned it on in Settings."""
+        if not self.settings.check_updates:
+            return
+        try:
+            last = datetime.fromisoformat(self.settings.last_update_check)
+        except ValueError:
+            last = None
+        if last is None or datetime.now() - last >= UPDATE_CHECK_EVERY:
+            self.check_updates(quiet=True)
+
+    def check_updates(self, quiet: bool) -> None:
+        if self.update_task is not None:
+            return
+        self.update_task = Task(lambda progress: check_for_update(), self)
+        outcome: dict = {}
+        self.update_task.succeeded.connect(lambda info: outcome.update(info=info))
+        self.update_task.failed.connect(lambda message: outcome.update(error=message))
+        self.update_task.finished.connect(lambda: self._update_checked(outcome, quiet))
+        if not quiet:
+            self.statusBar().showMessage("Checking for updates...")
+        self.update_task.start()
+
+    def _update_checked(self, outcome: dict, quiet: bool) -> None:
+        self.update_task = None
+        self.statusBar().clearMessage()
+        self.settings.last_update_check = datetime.now().isoformat(timespec="seconds")
+        self.settings.save()
+        if "error" in outcome:
+            log.warning("Update check failed: %s", outcome["error"])
+            if not quiet:
+                QMessageBox.warning(self, "Check for updates", outcome["error"])
+            return
+        info: UpdateInfo | None = outcome.get("info")
+        if info is None:
+            log.info("Update check: up to date")
+            if not quiet:
+                QMessageBox.information(self, "Check for updates", f"You have the latest version ({__version__}).")
+            return
+        log.info("Update check: %s is available", info.version)
+        self.show_update(info)
+
+    def show_update(self, info: UpdateInfo) -> None:
+        box = QMessageBox(self)
+        box.setWindowTitle("Update available")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(f"{APP_NAME} {info.version} is available. You have {__version__}.")
+        box.setInformativeText("Download the installer and run it; your folders, rules and history are kept.")
+        if info.notes:
+            box.setDetailedText(info.notes)
+        download = box.addButton("Download", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is download:
+            QDesktopServices.openUrl(QUrl(info.download_url or info.page_url or RELEASES_PAGE))
 
     def closeEvent(self, event) -> None:
         if not self._quitting and self.tray is not None and self.settings.minimize_to_tray:
