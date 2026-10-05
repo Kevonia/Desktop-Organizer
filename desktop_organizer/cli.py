@@ -18,6 +18,7 @@ from desktop_organizer.core.structure import TOKENS, PatternError, example, vali
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="desktop-organizer", description=f"{APP_NAME} {__version__}")
+    parser.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     def structure_options(p: argparse.ArgumentParser) -> None:
