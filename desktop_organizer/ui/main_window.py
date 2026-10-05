@@ -256,7 +256,7 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         self._action(file_menu, "Choose folder...", self.add_folder_from_dialog, QKeySequence.StandardKey.Open)
         file_menu.addSeparator()
-        self._action(file_menu, "Quit", self.quit_app, QKeySequence.StandardKey.Quit)
+        self._action(file_menu, "Quit", self.quit_app, QKeySequence("Ctrl+Q"))
 
         actions = self.menuBar().addMenu("&Actions")
         self._action(actions, "Refresh preview", self.refresh_preview, QKeySequence.StandardKey.Refresh)
