@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "desktop-organizer"
+dynamic = ["version"]
+description = "Keep your Desktop tidy by sorting files into Year / Month / Type folders, with undo."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["PySide6>=6.6"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+build = ["pyinstaller>=6.10"]
+
+[project.scripts]
+desktop-organizer = "desktop_organizer.cli:main"
+
+[project.gui-scripts]
+desktop-organizer-gui = "desktop_organizer.ui.app:main"
+
+[tool.setuptools.packages.find]
+include = ["desktop_organizer*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "desktop_organizer.__version__" }
+
+[tool.setuptools.package-data]
+desktop_organizer = ["resources/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
