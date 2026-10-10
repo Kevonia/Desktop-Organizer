@@ -127,8 +127,7 @@ class FindTab(QWidget):
         self._update_buttons()
 
     def _folders(self) -> list[Path]:
-        folders = [f.location for f in self.organizer.settings.folders] + self.organizer.version_folders()
-        return [f for f in folders if f.is_dir()]
+        return self.organizer.search_folders()
 
     def search_now(self, query: str) -> list[FoundFile]:
         """Run a search on this thread (used by tests and for short queries)."""

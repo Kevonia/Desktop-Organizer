@@ -9,7 +9,7 @@ from desktop_organizer.core.config import FolderProfile, Settings
 from desktop_organizer.core.history import History, UndoResult
 from desktop_organizer.core.logs import log
 from desktop_organizer.core.mover import ProgressCallback, RunResult
-from desktop_organizer.core.paths import desktop_dir, resolve_folder
+from desktop_organizer.core.paths import desktop_dir, resolve_folder, same_path
 from desktop_organizer.core.rules import PlannedMove
 from desktop_organizer.core.versions import VersionStore
 
@@ -44,6 +44,25 @@ class Organizer:
     def pattern_for(self, folder: Path) -> str:
         return self.settings.pattern_for(folder)
 
+    def check_destination(self, folder: Path) -> Path:
+        """Where ``folder``'s files go. Raises UnsafeFolderError (or DriveNotConnectedError) if unusable."""
+        base = self.settings.destination_for(folder)
+        if not same_path(base, folder):
+            safety.ensure_destination(base)
+        return base
+
+    def search_folders(self) -> list[Path]:
+        """Saved folders, their destinations and protected folders that are available right now."""
+        folders: list[Path] = []
+        for profile in self.settings.folders:
+            for path in (profile.location, profile.target):
+                if path.is_dir() and not any(same_path(path, f) for f in folders):
+                    folders.append(path)
+        for path in self.version_folders():
+            if not any(same_path(path, f) for f in folders):
+                folders.append(path)
+        return folders
+
     def preview(self, folder: Path | None = None, pattern: str | None = None) -> list[PlannedMove]:
         return rules.plan(folder or desktop_dir(), self.settings, pattern)
 
@@ -56,6 +75,7 @@ class Organizer:
     ) -> RunResult:
         folder = folder or desktop_dir()
         safety.ensure_allowed(folder)
+        self.check_destination(folder)
         pattern = pattern or self.settings.pattern_for(folder)
         if moves is None:
             moves = rules.plan(folder, self.settings, pattern)

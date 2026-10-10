@@ -6,6 +6,7 @@ import os
 import sys
 from pathlib import Path
 
+from desktop_organizer.core import drives
 from desktop_organizer.core.paths import app_data_dir, is_within, same_path
 
 # Files that mean "this is a code/Docker project": moving its files would break it.
@@ -21,17 +22,41 @@ class UnsafeFolderError(Exception):
     """Raised for folders the organizer must never rearrange."""
 
 
+class DriveNotConnectedError(UnsafeFolderError):
+    """The folder is on a USB or network drive that isn't available right now."""
+
+
 def ensure_allowed(folder: Path) -> None:
     if not folder.is_dir():
+        if not drives.is_connected(folder):
+            raise DriveNotConnectedError(drives.missing_message(folder))
         raise UnsafeFolderError(f"{folder} is not a folder.")
     resolved = folder.resolve()
-    if resolved.parent == resolved:
+    # A USB stick or network share is often organized as a whole; a computer's own drive never is.
+    if resolved.parent == resolved and not drives.is_external(resolved):
         raise UnsafeFolderError(f"{folder} is the root of a drive. Pick a folder inside it instead.")
     if same_path(resolved, Path.home()):
         raise UnsafeFolderError("That is your whole user folder. Pick a folder inside it, like Downloads.")
     for protected in _protected_dirs():
         if is_within(resolved, protected):
             raise UnsafeFolderError(f"{folder} is a system or app folder and can't be organized.")
+
+
+def ensure_destination(destination: Path) -> None:
+    """Check a folder files are sent to. It may not exist yet, but its drive must be there."""
+    if not drives.is_connected(destination):
+        raise DriveNotConnectedError(drives.missing_message(destination))
+    existing = destination
+    while not existing.exists() and existing.parent != existing:
+        existing = existing.parent
+    if existing.exists() and not existing.is_dir():
+        raise UnsafeFolderError(f"{existing} is a file, so files can't be put inside it.")
+    resolved = destination.resolve()
+    if resolved.parent == resolved and not drives.is_external(resolved):
+        raise UnsafeFolderError(f"{destination} is the root of a drive. Pick a folder inside it instead.")
+    for protected in _protected_dirs():
+        if is_within(resolved, protected):
+            raise UnsafeFolderError(f"{destination} is a system or app folder, so files can't be put there.")
 
 
 def warnings(folder: Path) -> list[str]:

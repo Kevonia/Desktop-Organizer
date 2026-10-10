@@ -8,9 +8,10 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+from desktop_organizer.core import content
 from desktop_organizer.core.categories import normalize_extension
 from desktop_organizer.core.paths import resolve_folder, same_path
-from desktop_organizer.core.structure import PatternError, validate
+from desktop_organizer.core.structure import PatternError, validate, validate_name
 
 
 class ConditionKind(str, Enum):
@@ -22,10 +23,16 @@ class ConditionKind(str, Enum):
     SMALLER_THAN_MB = "smaller_than_mb"
     OLDER_THAN_DAYS = "older_than_days"
     NEWER_THAN_DAYS = "newer_than_days"
+    CONTENT_CONTAINS = "content_contains"
 
     @property
     def label(self) -> str:
         return _LABELS[self]
+
+    @property
+    def is_slow(self) -> bool:
+        """Needs to open the file, so it is checked after the other conditions."""
+        return self is ConditionKind.CONTENT_CONTAINS
 
     @property
     def is_number(self) -> bool:
@@ -42,6 +49,7 @@ _LABELS = {
     ConditionKind.SMALLER_THAN_MB: "Smaller than (MB)",
     ConditionKind.OLDER_THAN_DAYS: "Older than (days)",
     ConditionKind.NEWER_THAN_DAYS: "Newer than (days)",
+    ConditionKind.CONTENT_CONTAINS: "Text inside contains (PDF, Word, text)",
 }
 
 
@@ -82,6 +90,8 @@ class Condition:
         if kind is ConditionKind.EXTENSION_IS:
             wanted = {normalize_extension(e) for e in value.replace(";", ",").split(",") if e.strip()}
             return normalize_extension(path.suffix) in wanted
+        if kind is ConditionKind.CONTENT_CONTAINS:
+            return content.contains(path, value)
         number = float(value)
         if kind is ConditionKind.LARGER_THAN_MB:
             return size > number * 1_000_000
@@ -102,6 +112,7 @@ class Rule:
     destination: str = ""  # a structure pattern, e.g. "Finance/Invoices/{year}"
     enabled: bool = True
     folders: list[str] = field(default_factory=list)  # folder specs it applies to; empty = all
+    rename: str = ""  # a name template, e.g. "{date} {name}"; empty keeps the name
 
     def validate(self) -> None:
         if not self.name.strip():
@@ -115,6 +126,13 @@ class Rule:
                 self.destination = validate(self.destination)
             except PatternError as exc:
                 raise RuleError(f"Rule '{self.name}': {exc}") from None
+            if self.rename.strip():
+                try:
+                    self.rename = validate_name(self.rename)
+                except PatternError as exc:
+                    raise RuleError(f"Rule '{self.name}' new name: {exc}") from None
+            else:
+                self.rename = ""
 
     def applies_to(self, folder: Path) -> bool:
         return not self.folders or any(same_path(resolve_folder(f), folder) for f in self.folders)
@@ -124,7 +142,9 @@ class Rule:
             return False
         now = now or datetime.now()
         try:
-            results = (c.matches(path, size, when, now) for c in self.conditions)
+            # Cheap checks first, so a file's contents are only read when they could decide the match.
+            ordered = sorted(self.conditions, key=lambda c: c.kind.is_slow)
+            results = (c.matches(path, size, when, now) for c in ordered)
             return all(results) if self.match_all else any(results)
         except ValueError:  # a number that no longer parses; treat as no match
             return False
@@ -138,6 +158,7 @@ class Rule:
             "destination": self.destination,
             "enabled": self.enabled,
             "folders": list(self.folders),
+            "rename": self.rename,
         }
 
     @classmethod
@@ -160,6 +181,7 @@ class Rule:
             destination=str(data.get("destination", "")),
             enabled=bool(data.get("enabled", True)),
             folders=[str(f) for f in data.get("folders", [])],
+            rename=str(data.get("rename", "") or ""),
         )
 
 

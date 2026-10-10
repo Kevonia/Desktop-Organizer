@@ -9,7 +9,7 @@ from pathlib import Path
 
 from desktop_organizer.core.categories import normalize_extension
 from desktop_organizer.core.paths import app_data_dir, display_name, known_folder_key, resolve_folder, same_path
-from desktop_organizer.core.structure import PatternError, validate
+from desktop_organizer.core.structure import PatternError, validate, validate_name
 from desktop_organizer.core.user_rules import Rule
 
 
@@ -87,10 +87,17 @@ class FolderProfile:
     path: str  # a known name like "downloads", or an absolute path
     pattern: str | None = None  # None means use Settings.pattern
     auto: AutoMode = AutoMode.OFF
+    rename: str | None = None  # a name template like "{date} {name}"; None keeps names
+    destination: str | None = None  # where organized files go; None means inside the folder itself
 
     @property
     def location(self) -> Path:
         return resolve_folder(self.path)
+
+    @property
+    def target(self) -> Path:
+        """The folder organized files are put in (the folder itself unless chosen otherwise)."""
+        return resolve_folder(self.destination) if self.destination else self.location
 
     @property
     def name(self) -> str:
@@ -118,6 +125,8 @@ class Settings:
     version_folders: list[str] = field(default_factory=list)
     versions_to_keep: int = 4
     version_max_mb: int = 50
+    # False only for brand-new installs, so the welcome screen with ready-made setups shows once.
+    welcome_shown: bool = False
 
     # --- folders -------------------------------------------------------------
 
@@ -128,6 +137,14 @@ class Settings:
         profile = self.find_folder(folder)
         return profile.pattern if profile and profile.pattern else self.pattern
 
+    def destination_for(self, folder: Path) -> Path:
+        profile = self.find_folder(folder)
+        return profile.target if profile else folder
+
+    def rename_for(self, folder: Path) -> str | None:
+        profile = self.find_folder(folder)
+        return profile.rename if profile else None
+
     def add_folder(self, spec: str, pattern: str | None = None) -> FolderProfile:
         """Add (or update) a folder. Known names like 'downloads' are kept as names so
         they keep working if Windows moves the folder (e.g. into OneDrive)."""
@@ -137,6 +154,8 @@ class Settings:
         existing = self.find_folder(profile.location)
         if existing:
             profile.auto = existing.auto
+            profile.rename = existing.rename
+            profile.destination = existing.destination
             self.folders[self.folders.index(existing)] = profile
         else:
             self.folders.append(profile)
@@ -184,7 +203,7 @@ class Settings:
     def to_dict(self) -> dict:
         return {
             "pattern": self.pattern,
-            "folders": [{"path": f.path, "pattern": f.pattern, "auto": f.auto.value} for f in self.folders],
+            "folders": [folder_to_dict(f) for f in self.folders],
             "custom_categories": self.custom_categories,
             "excluded_extensions": self.excluded_extensions,
             "excluded_names": self.excluded_names,
@@ -198,6 +217,7 @@ class Settings:
             "version_folders": self.version_folders,
             "versions_to_keep": self.versions_to_keep,
             "version_max_mb": self.version_max_mb,
+            "welcome_shown": self.welcome_shown,
         }
 
     @classmethod
@@ -209,12 +229,7 @@ class Settings:
                 pattern = SortMode(data["sort_mode"]).pattern
             except ValueError:
                 pattern = None
-        folders = []
-        for item in data.get("folders", [{"path": "desktop"}]):
-            if isinstance(item, dict) and item.get("path"):
-                folders.append(FolderProfile(
-                    str(item["path"]), _valid_or_none(item.get("pattern")), _auto_mode(item.get("auto"))
-                ))
+        folders = [f for f in (folder_from_dict(item) for item in data.get("folders", [{"path": "desktop"}])) if f]
         return cls(
             pattern=_valid_or_none(pattern) or defaults.pattern,
             folders=folders,
@@ -235,6 +250,8 @@ class Settings:
             version_folders=[str(f) for f in data.get("version_folders", []) if f],
             versions_to_keep=_clamp(data.get("versions_to_keep"), 1, 20, defaults.versions_to_keep),
             version_max_mb=_clamp(data.get("version_max_mb"), 1, 2000, defaults.version_max_mb),
+            # Settings saved before this existed belong to people who are past the welcome.
+            welcome_shown=bool(data.get("welcome_shown", True)),
         )
 
     @classmethod
@@ -249,6 +266,37 @@ class Settings:
         path = path or settings_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+
+
+def folder_to_dict(profile: FolderProfile) -> dict:
+    data = {"path": profile.path, "pattern": profile.pattern, "auto": profile.auto.value}
+    if profile.rename:
+        data["rename"] = profile.rename
+    if profile.destination:
+        data["destination"] = profile.destination
+    return data
+
+
+def folder_from_dict(item: object) -> FolderProfile | None:
+    if not isinstance(item, dict) or not item.get("path"):
+        return None
+    destination = item.get("destination")
+    return FolderProfile(
+        str(item["path"]),
+        _valid_or_none(item.get("pattern")),
+        _auto_mode(item.get("auto")),
+        rename=valid_name_or_none(item.get("rename")),
+        destination=str(destination) if isinstance(destination, str) and destination.strip() else None,
+    )
+
+
+def valid_name_or_none(template: object) -> str | None:
+    if not isinstance(template, str) or not template.strip():
+        return None
+    try:
+        return validate_name(template)
+    except PatternError:
+        return None
 
 
 def settings_path() -> Path:

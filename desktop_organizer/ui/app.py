@@ -6,16 +6,17 @@ import sys
 from pathlib import Path
 
 from PySide6 import QtSvg  # noqa: F401 - makes PyInstaller bundle SVG support for the icon
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from desktop_organizer import APP_NAME, __version__
-from desktop_organizer.core import Organizer, startup
-from desktop_organizer.core.logs import setup_logging
+from desktop_organizer.core import Organizer, shell, startup
+from desktop_organizer.core.logs import log, setup_logging
 from desktop_organizer.ui import theme
 from desktop_organizer.ui.errors import install_error_handler
 from desktop_organizer.ui.main_window import MainWindow
-from desktop_organizer.ui.single_instance import SingleInstance
+from desktop_organizer.ui.single_instance import SHOW, SingleInstance
 
 ICON_PATH = Path(__file__).resolve().parent.parent / "resources" / "icon.svg"
 
@@ -31,6 +32,8 @@ def main(argv: list[str] | None = None) -> int:
 
     argv = list(argv if argv is not None else sys.argv)
     minimized = startup.MINIMIZED_FLAG in argv
+    request = shell.parse_args(argv)  # from the File Explorer right-click menu
+    message = "\t".join(request) if request else SHOW
     app = QApplication(argv)
     # The window may be hidden in the tray; quitting is handled by MainWindow.
     app.setQuitOnLastWindowClosed(False)
@@ -42,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Already running (maybe hidden in the tray)? Bring that copy forward instead.
     instance = SingleInstance()
-    if instance.notify_running():
+    if instance.notify_running(message):
         return 0
     instance.listen()
 
@@ -57,8 +60,17 @@ def main(argv: list[str] | None = None) -> int:
 
     window = MainWindow(organizer)
     instance.activated.connect(window.show_window)
-    if not (minimized and window.tray is not None):
+    instance.messageReceived.connect(window.handle_message)
+    if not (minimized and window.tray is not None) or request:
         window.show()
+    if request:
+        QTimer.singleShot(0, lambda: window.handle_message(message))
+    elif not organizer.settings.welcome_shown and not minimized:
+        QTimer.singleShot(300, window.show_welcome)
+    try:
+        shell.refresh()  # keep the Explorer menu pointing at this copy after an update or a move
+    except OSError as exc:
+        log.warning("Couldn't update the File Explorer menu: %s", exc)
     return app.exec()
 
 

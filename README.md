@@ -33,6 +33,9 @@ reinstall picks up where you left off.
   filter the list, then click **Organize**.
 - **Any folder**: Desktop, Documents, Downloads, Pictures, Music, Videos or one
   you pick, each with its own layout. Follows Windows' OneDrive redirects.
+- **Ready-made setups** for a Student, Freelancer, Photographer or Music
+  collector add matching rules and layouts in one click. New users are offered
+  them on first launch; they merge with your own settings.
 - **Ready-made layouts**: File type · Category · Year / Month ·
   Year / Month / File type · Year / Month / Category.
 - **Build your own layout** from placeholders, e.g. `Work/{category}/{year}`:
@@ -44,14 +47,33 @@ reinstall picks up where you left off.
   | `{month_num}` | 01 | `{category}` | Documents |
   | `{month_name}` | January | `{size}` | Small, Medium, Large, Huge |
   | `{month_short}` | Jan | `{first_letter}` | R |
-  | `{day}` | 05 | | |
+  | `{day}` | 05 | `{date}` | 2025-01-05 |
+
+  Read from inside the file (with a sensible fallback when it isn't there):
+
+  | Placeholder | Example | Placeholder | Example |
+  | --- | --- | --- | --- |
+  | `{photo_date}` | 2021-07-04 (date taken) | `{artist}` | Bob Marley |
+  | `{photo_year}` | 2021 | `{album}` | Legend |
+  | `{photo_month}` | 07-July | `{source}` | github.com (where it was downloaded from) |
+  | `{camera}` | Canon EOS R6 | | |
 
 - **Your own categories**, e.g. *Invoices = pdf*, used by `{category}`.
 - **Rules** checked before the layout, e.g. *name contains "invoice" and type
   is pdf → `Finance/Invoices/{year}`*, or *leave these files alone*. Conditions
-  cover name, type, size and age; a rule can apply to every folder or one.
+  cover name, type, size, age and **the text inside** PDF, Word, Excel,
+  PowerPoint and text files; a rule can apply to every folder or one.
+- **Rename as you organize**, e.g. `{date} {name}` turns `IMG_1234.jpg` into
+  `2025-01-05 IMG_1234.jpg`. Set per folder or per rule, shown in the preview,
+  and undone with the rest of the run.
+- **Put files somewhere else**: organize a folder into another one, such as a
+  USB drive or a network folder (NAS). A USB stick or network share can also
+  be organized as a whole. If a drive isn't plugged in, the folder shows
+  *(not connected)*, nothing moves, and auto-organize waits for it.
 - **Undo** any run from History. Folders a run created are removed again, and
   files are never overwritten.
+- **Export a record** of the preview (Ctrl+E) or of any past run (History ›
+  Export run) as a spreadsheet (CSV) or a web page (HTML).
 
 ### Automate
 
@@ -63,6 +85,9 @@ reinstall picks up where you left off.
   and *Start with Windows*.
 - **Find duplicates** by content, keep the oldest copy, and send the extras to
   the Recycle Bin.
+- **Export and import settings** (File menu): share rules, categories and
+  layouts as a file, for a second PC or a whole team. Imports merge with what's
+  there, and auto-organize stays off until it's turned on.
 
 ### Find & recover (Ctrl+F)
 
@@ -74,6 +99,12 @@ reinstall picks up where you left off.
   version, save a copy, or bring back a protected file that was deleted.
 - **Recycle Bin**: see what's in the Recycle Bin with each item's original
   location and deletion date, and put items back where they came from.
+- **Where did this file come from?**: right-click a file in File Explorer to
+  see where the organizer moved it from (through every move) and the website it
+  was downloaded from. Turn on the menu in **Settings › File Explorer**; folders
+  also get *Organize with Desktop Organizer*, which opens the preview.
+- **Storage stats** (Ctrl+I): what's taking up space by category, the largest
+  files, and files not opened or changed in months. Read-only.
 
 ### Safe and private
 
@@ -96,11 +127,13 @@ reinstall picks up where you left off.
 | Ctrl+F | Find a file |
 | Ctrl+Shift+V | File versions |
 | Ctrl+Enter | Organize the ticked files |
+| Ctrl+E | Export the preview |
 | Ctrl+Z | Undo the last run |
 | F5 | Refresh the preview |
 | Ctrl+O | Add a folder |
 | Ctrl+R | Rules |
 | Ctrl+D | Find duplicates |
+| Ctrl+I | Storage stats |
 | Ctrl+H | History |
 | Ctrl+Q | Quit |
 
@@ -141,6 +174,16 @@ python main.py folders add downloads --mode category
 python main.py structure set --pattern "Work/{category}/{year}"
 python main.py structure tokens                    # list placeholders
 python main.py categories add Invoices pdf
+python main.py folders add downloads --rename "{date} {name}" --dest "E:\Archive"
+python main.py setups list                         # student, freelancer, ...
+python main.py setups apply photographer
+python main.py report preview downloads -o preview.html
+python main.py report run -o last-run.csv          # the latest run, or give its number
+python main.py stats downloads --months 12
+python main.py settings export my-setup.json --only rules layouts
+python main.py settings import my-setup.json
+python main.py where "C:\Users\me\Documents\Invoices\scan.pdf"
+python main.py shell on                            # File Explorer menu (Windows)
 python -m desktop_organizer                        # text menu
 ```
 
@@ -150,7 +193,7 @@ python -m desktop_organizer                        # text menu
 python -m pytest
 ```
 
-127 tests, including headless tests of every window. Tests never touch your
+175 tests, including headless tests of every window. Tests never touch your
 real folders: the Desktop, Downloads, settings and Recycle Bin are all
 redirected to temporary folders.
 

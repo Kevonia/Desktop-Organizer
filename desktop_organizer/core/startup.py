@@ -14,14 +14,26 @@ def is_supported() -> bool:
     return sys.platform == "win32"
 
 
-def launch_command() -> str:
+def app_command(*args: str) -> str:
+    """The command line that opens the app window, followed by ``args``."""
     if getattr(sys, "frozen", False):  # the installed DesktopOrganizer.exe
-        return f'"{sys.executable}" {MINIMIZED_FLAG}'
-    # Running from source: use pythonw so no console window appears.
-    python = Path(sys.executable)
-    pythonw = python.with_name("pythonw.exe")
-    main_py = Path(__file__).resolve().parents[2] / "main.py"
-    return f'"{pythonw if pythonw.exists() else python}" "{main_py}" {MINIMIZED_FLAG}'
+        base = f'"{sys.executable}"'
+    else:
+        # Running from source: use pythonw so no console window appears.
+        python = Path(sys.executable)
+        pythonw = python.with_name("pythonw.exe")
+        main_py = Path(__file__).resolve().parents[2] / "main.py"
+        base = f'"{pythonw if pythonw.exists() else python}" "{main_py}"'
+    return " ".join([base, *args])
+
+
+def app_icon() -> str:
+    """What Windows should show next to the app's menu entries."""
+    return f'"{sys.executable}",0' if getattr(sys, "frozen", False) else ""
+
+
+def launch_command() -> str:
+    return app_command(MINIMIZED_FLAG)
 
 
 def is_enabled() -> bool:

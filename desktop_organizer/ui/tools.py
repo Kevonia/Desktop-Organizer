@@ -32,7 +32,8 @@ from PySide6.QtWidgets import (
 
 from desktop_organizer.core import Organizer, rules, trash
 from desktop_organizer.core.duplicates import DuplicateGroup, find_duplicates
-from desktop_organizer.core.structure import TOKENS
+from desktop_organizer.core.safety import UnsafeFolderError
+from desktop_organizer.core.structure import NAME_TOKENS, TOKENS
 from desktop_organizer.core.user_rules import Condition, ConditionKind, Rule, RuleAction, RuleError
 from desktop_organizer.ui.worker import Task
 
@@ -172,6 +173,13 @@ class RulesDialog(QDialog):
         self.destination_edit.textChanged.connect(self._store)
         form2.addRow("Folder", self.destination_edit)
 
+        self.rename_edit = QLineEdit()
+        self.rename_edit.setPlaceholderText("Leave empty to keep the name, or e.g. {date} {name}")
+        self.rename_edit.setToolTip("The extension is always kept. Placeholders: "
+                                    + ", ".join(f"{{{t}}}" for t in {**NAME_TOKENS, **TOKENS}))
+        self.rename_edit.textChanged.connect(self._store)
+        form2.addRow("Rename to", self.rename_edit)
+
         self.scope_combo = QComboBox()
         self.scope_combo.addItem("All folders", None)
         for profile in self.organizer.settings.folders:
@@ -211,6 +219,7 @@ class RulesDialog(QDialog):
                 self._add_condition_row(condition)
             self.action_combo.setCurrentIndex(self.action_combo.findData(rule.action.value))
             self.destination_edit.setText(rule.destination)
+            self.rename_edit.setText(rule.rename)
             scope = self.scope_combo.findData(rule.folders[0]) if rule.folders else 0
             self.scope_combo.setCurrentIndex(max(scope, 0))
         self._loading = False
@@ -249,9 +258,11 @@ class RulesDialog(QDialog):
                 rule.conditions.append(Condition(ConditionKind(row.kind.currentData()), row.value.text()))
         rule.action = RuleAction(self.action_combo.currentData())
         rule.destination = self.destination_edit.text()
+        rule.rename = self.rename_edit.text()
         scope = self.scope_combo.currentData()
         rule.folders = [scope] if scope else []
         self.destination_edit.setEnabled(rule.action is RuleAction.MOVE)
+        self.rename_edit.setEnabled(rule.action is RuleAction.MOVE)
         item = self.list.currentItem()
         if item is not None:
             self.list.blockSignals(True)
@@ -275,14 +286,21 @@ class RulesDialog(QDialog):
             return
         candidate.enabled = True
         with_rule = dataclasses.replace(self.organizer.settings, rules=[candidate])
-        planned = rules.plan(self.folder, with_rule)
+        try:
+            planned = rules.plan(self.folder, with_rule)
+            without = []
+            if candidate.action is RuleAction.SKIP:
+                without = rules.plan(self.folder, dataclasses.replace(self.organizer.settings, rules=[]))
+        except (OSError, UnsafeFolderError) as exc:
+            self.matches.setText(f"Can't check matches right now: {exc}")
+            return
         if candidate.action is RuleAction.SKIP:
-            without = rules.plan(self.folder, dataclasses.replace(self.organizer.settings, rules=[]))
             skipped = len(without) - len(planned)
             self.matches.setText(f"Would leave {skipped} file(s) in {self.folder.name} where they are.")
             return
         hits = [m for m in planned if m.rule == candidate.name]
-        names = ", ".join(m.source.name for m in hits[:5]) + (" ..." if len(hits) > 5 else "")
+        names = ", ".join(m.source.name + (f" (as {m.new_name})" if m.new_name else "")
+                          for m in hits[:5]) + (" ..." if len(hits) > 5 else "")
         self.matches.setText(f"Matches {len(hits)} file(s) in {self.folder.name}" + (f": {names}" if hits else "."))
 
     def _save(self) -> None:

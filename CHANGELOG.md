@@ -12,6 +12,48 @@ moves them under the new version number.
 
 ## [Unreleased]
 
+### Added
+
+- **Ready-made setups** for a Student, Freelancer, Photographer and Music
+  collector (Tools › Ready-made setups). New installs are offered them once on
+  first launch. A setup merges with existing rules and folders.
+- **Placeholders from inside files**: `{photo_date}`, `{photo_year}` and
+  `{photo_month}` (when a photo was taken), `{camera}`, `{artist}` and
+  `{album}` (music tags in MP3, FLAC, M4A and Ogg), and `{source}` (the website
+  a download came from). Also `{date}` (e.g. 2025-01-05). A file's contents
+  are only read when a layout uses one of these.
+- **Text inside a file** as a rule condition: PDF (first 5 pages), Word, Excel,
+  PowerPoint, OpenDocument, RTF and text files.
+- **Rename as you organize**, per folder (*File names* button) or per rule
+  (*Rename to*), with `{name}` for the original name. Shown in the preview and
+  undone with the run.
+- **Put files in another folder**, such as a USB drive or a network folder
+  (*Put files in* button). The roots of USB drives and network shares can now
+  be organized. Unplugged drives show *(not connected)*; nothing moves and
+  auto-organize waits until the drive is back.
+- **Export the preview** (Actions › Export preview, Ctrl+E) or **a past run**
+  (History › Export run) as CSV or HTML.
+- **Storage stats** (sidebar, or Ctrl+I): space by category, the largest
+  files, and files not used in a chosen number of months.
+- **Export and import settings** (File menu) as a `.json` file: rules,
+  categories, folders and layouts, and files never to move.
+- **File Explorer menu** (Settings › File Explorer): *Organize with Desktop
+  Organizer* on folders opens the preview, and *Where did this file come
+  from?* on files shows its earlier locations and download page. The
+  uninstaller removes these entries.
+- Command line: `setups`, `report`, `stats`, `settings export|import`,
+  `where`, `shell`, and `folders add --rename / --dest`.
+
+### Changed
+
+- New dependency: `pypdf` (BSD licence) to read text in PDFs.
+- A second launch now passes its request (e.g. from the File Explorer menu) to
+  the copy that's already running.
+
+### Fixed
+
+- The sidebar button showed "Find _recover" instead of "Find & recover".
+
 ## [1.3.0] - 2026-10-05
 
 ### Added

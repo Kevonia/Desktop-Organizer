@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Signal
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
@@ -25,10 +27,19 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from desktop_organizer.core import Organizer, SortMode, rules, startup
+from desktop_organizer.core import Organizer, SortMode, reports, rules, shell, startup
 from desktop_organizer.core.categories import CATEGORIES
 from desktop_organizer.core.config import describe_pattern
-from desktop_organizer.core.structure import TOKENS, PatternError, example, validate
+from desktop_organizer.core.safety import UnsafeFolderError
+from desktop_organizer.core.structure import (
+    NAME_TOKENS,
+    TOKENS,
+    PatternError,
+    example,
+    render_name,
+    validate,
+    validate_name,
+)
 
 BUILD_OWN = "__build_own__"
 
@@ -105,10 +116,137 @@ class StructureDialog(QDialog):
         settings = self.organizer.settings
         lines = []
         if self.folder is not None and self.folder.is_dir():
-            for move in rules.plan(self.folder, settings, pattern)[:8]:
+            try:
+                moves = rules.plan(self.folder, settings, pattern)
+            except (OSError, UnsafeFolderError):
+                moves = []
+            for move in moves[:8]:
                 lines.append(f"{move.source.name}  ->  {move.relative_target.as_posix()}/")
         if not lines:
             lines.append(example(pattern, settings.custom_categories))
+        self.preview.setPlainText("\n".join(lines))
+
+
+RENAME_PRESETS = (
+    ("Date first", "{date} {name}"),
+    ("Date taken first (photos)", "{photo_date} {name}"),
+    ("Artist - name (music)", "{artist} - {name}"),
+    ("Category and date", "{category} {date} {name}"),
+)
+RENAME_TOKENS = ("name", "date", "photo_date", "year", "month_num", "day", "category", "camera", "artist",
+                 "album", "source")
+
+
+class RenameDialog(QDialog):
+    """Choose how files are renamed as they're organized, with a live before/after preview."""
+
+    def __init__(self, organizer: Organizer, folder: Path | None, initial: str | None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Rename files")
+        self.setMinimumWidth(640)
+        self.organizer = organizer
+        self.folder = folder
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            "Give files tidy names as they're organized. The extension is always kept, and "
+            "<code>{name}</code> is the original name. Renames are undone with the rest of the run."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self.enabled = QCheckBox("Rename files in this folder")
+        self.enabled.setChecked(bool(initial))
+        layout.addWidget(self.enabled)
+
+        self.edit = QLineEdit(initial or RENAME_PRESETS[0][1])
+        self.edit.setPlaceholderText("{date} {name}")
+        layout.addWidget(self.edit)
+
+        presets = QHBoxLayout()
+        presets.addWidget(QLabel("Quick picks:"))
+        for label, template in RENAME_PRESETS:
+            button = QPushButton(label)
+            button.setToolTip(template)
+            button.clicked.connect(lambda _=False, t=template: self._use(t))
+            presets.addWidget(button)
+        presets.addStretch()
+        layout.addLayout(presets)
+
+        grid = QGridLayout()
+        all_tokens = {**TOKENS, **NAME_TOKENS}
+        for i, token in enumerate(RENAME_TOKENS):
+            description, sample = all_tokens[token]
+            button = QPushButton(f"{{{token}}}")
+            button.setObjectName("Token")
+            button.setToolTip(f"{description} - e.g. {sample}")
+            button.clicked.connect(lambda _=False, t=token: self._insert(f"{{{t}}}"))
+            grid.addWidget(button, i // 4, i % 4)
+        layout.addLayout(grid)
+
+        self.error = QLabel()
+        self.error.setObjectName("Error")
+        self.error.setWordWrap(True)
+        layout.addWidget(self.error)
+
+        layout.addWidget(QLabel("Preview"))
+        self.preview = QPlainTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setFixedHeight(150)
+        layout.addWidget(self.preview)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+
+        self.enabled.toggled.connect(self._update)
+        self.edit.textChanged.connect(self._update)
+        self._update()
+
+    def template(self) -> str | None:
+        """The chosen template, or None to keep the original names."""
+        return validate_name(self.edit.text()) if self.enabled.isChecked() else None
+
+    def _use(self, template: str) -> None:
+        self.enabled.setChecked(True)
+        self.edit.setText(template)
+
+    def _insert(self, text: str) -> None:
+        self.enabled.setChecked(True)
+        self.edit.insert(text)
+        self.edit.setFocus()
+
+    def _update(self) -> None:
+        on = self.enabled.isChecked()
+        self.edit.setEnabled(on)
+        ok_button = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
+        if not on:
+            self.error.setText("")
+            self.preview.setPlainText("Files keep their names.")
+            ok_button.setEnabled(True)
+            return
+        try:
+            template = self.template()
+        except PatternError as exc:
+            self.error.setText(str(exc))
+            self.preview.setPlainText("")
+            ok_button.setEnabled(False)
+            return
+        self.error.setText("")
+        ok_button.setEnabled(True)
+        settings = self.organizer.settings
+        lines = []
+        if self.folder is not None and self.folder.is_dir():
+            try:
+                moves = rules.plan(self.folder, settings, rename=template)
+            except (OSError, UnsafeFolderError):
+                moves = []
+            for move in moves[:8]:
+                lines.append(f"{move.source.name}  ->  {move.target_name}")
+        if not lines:
+            sample = Path("IMG_1234.jpg")
+            lines.append(f"{sample.name}  ->  {render_name(template, sample, datetime(2025, 1, 5), 250_000)}")
         self.preview.setPlainText("\n".join(lines))
 
 
@@ -267,9 +405,13 @@ class HistoryDialog(QDialog):
         row = QHBoxLayout()
         self.undo_button = QPushButton("Undo this run")
         self.undo_button.clicked.connect(self._undo_selected)
+        self.export_button = QPushButton("Export run...")
+        self.export_button.setToolTip("Save a list of the files this run moved, as a spreadsheet or web page")
+        self.export_button.clicked.connect(self._export_selected)
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
         row.addWidget(self.undo_button)
+        row.addWidget(self.export_button)
         row.addStretch()
         row.addWidget(close)
         layout.addLayout(row)
@@ -301,6 +443,13 @@ class HistoryDialog(QDialog):
     def _update_button(self) -> None:
         run = self._selected()
         self.undo_button.setEnabled(bool(run and run.can_undo))
+        self.export_button.setEnabled(run is not None)
+
+    def _export_selected(self) -> None:
+        run = self._selected()
+        if run is not None:
+            save_report(self, reports.run_report(self.organizer.history, run.id),
+                        f"Run {run.id} {run.started_at:%Y-%m-%d}")
 
     def _undo_selected(self) -> None:
         run = self._selected()
@@ -361,6 +510,12 @@ class SettingsDialog(QDialog):
         self.start_with_windows.setChecked(startup.is_enabled())
         self.start_with_windows.setVisible(startup.is_supported())
         form.addRow("", self.start_with_windows)
+        self.explorer_menu = QCheckBox("Add 'Organize with Desktop Organizer' and 'Where did this file "
+                                       "come from?' to the right-click menu")
+        self.explorer_menu.setToolTip("On Windows 11 these are under 'Show more options'.")
+        self.explorer_menu.setChecked(shell.is_enabled())
+        self.explorer_menu.setVisible(startup.is_supported())
+        form.addRow("File Explorer", self.explorer_menu)
         self.check_updates = QCheckBox("Check for updates once a week (contacts GitHub)")
         self.check_updates.setChecked(settings.check_updates)
         form.addRow("Updates", self.check_updates)
@@ -388,7 +543,35 @@ class SettingsDialog(QDialog):
                 startup.set_enabled(self.start_with_windows.isChecked())
             except OSError as exc:
                 QMessageBox.warning(self, "Start with Windows", f"Couldn't change this setting: {exc}")
+        if startup.is_supported() and self.explorer_menu.isChecked() != shell.is_enabled():
+            try:
+                shell.set_enabled(self.explorer_menu.isChecked())
+            except OSError as exc:
+                QMessageBox.warning(self, "File Explorer menu", f"Couldn't change this setting: {exc}")
         self.accept()
+
+
+def save_report(parent, report: reports.Report, suggested: str) -> Path | None:
+    """Ask where to save a report, then write it as CSV or HTML. Returns the saved path."""
+    filters = ";;".join(reports.FORMATS.values())
+    start = str(Path.home() / "Documents" / f"{_safe_file_name(suggested)}.html")
+    path, chosen = QFileDialog.getSaveFileName(parent, "Export", start, filters)
+    if not path:
+        return None
+    target = Path(path)
+    if target.suffix.lower() not in reports.FORMATS:
+        target = target.with_suffix(".csv" if "csv" in chosen else ".html")
+    try:
+        saved = reports.save(report, target)
+    except OSError as exc:
+        QMessageBox.warning(parent, "Export", f"Couldn't save the file: {exc.strerror or exc}")
+        return None
+    QMessageBox.information(parent, "Export", f"Saved {len(report.rows)} file(s) to\n{saved}")
+    return saved
+
+
+def _safe_file_name(text: str) -> str:
+    return "".join("_" if c in '<>:"/\\|?*' else c for c in text).strip() or "Report"
 
 
 def _split(text: str) -> list[str]:

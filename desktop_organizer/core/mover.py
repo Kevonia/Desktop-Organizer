@@ -37,10 +37,10 @@ def execute(
         try:
             if not move.source.exists():
                 raise FileNotFoundError("file no longer exists")
-            for directory in _missing_dirs(move.target_dir, root):
+            for directory in _missing_dirs(move.target_dir):
                 directory.mkdir()
                 history.record_created_dir(run_id, directory)
-            destination = unique_destination(move.target_dir, move.source.name)
+            destination = unique_destination(move.target_dir, move.target_name)
             shutil.move(str(move.source), str(destination))
         except OSError as exc:
             result.failed.append((move.source, exc.strerror or str(exc)))
@@ -64,11 +64,17 @@ def unique_destination(target_dir: Path, name: str) -> Path:
     return candidate
 
 
-def _missing_dirs(target: Path, root: Path) -> list[Path]:
-    """Directories between ``root`` and ``target`` that don't exist yet, outermost first."""
+def _missing_dirs(target: Path) -> list[Path]:
+    """Directories above ``target`` that don't exist yet, outermost first.
+
+    Normally this stops at the folder being organized; a chosen destination that doesn't exist yet is
+    created too (and removed again on undo).
+    """
     missing = []
     current = target
-    while current != root and not current.exists():
+    while not current.exists():
+        if current.parent == current:  # reached a drive that isn't there
+            raise FileNotFoundError(f"{current} isn't available")
         missing.append(current)
         current = current.parent
     return list(reversed(missing))

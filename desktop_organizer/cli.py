@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from desktop_organizer import APP_NAME, __version__
-from desktop_organizer.core import Organizer, SortMode
+from desktop_organizer.core import Organizer, SortMode, reports, setups, shell, transfer
 from desktop_organizer.core.categories import CATEGORIES
 from desktop_organizer.core.config import FolderProfile, describe_pattern
 from desktop_organizer.core.history import UndoResult
 from desktop_organizer.core.mover import RunResult
+from desktop_organizer.core.origin import find_origin
 from desktop_organizer.core.paths import resolve_folder
-from desktop_organizer.core.safety import UnsafeFolderError
-from desktop_organizer.core.structure import TOKENS, PatternError, example, validate
+from desktop_organizer.core.safety import UnsafeFolderError, ensure_destination
+from desktop_organizer.core.stats import collect, format_size
+from desktop_organizer.core.structure import NAME_TOKENS, TOKENS, PatternError, example, validate, validate_name
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,6 +47,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = folders.add_parser("add", help="save a folder (path or name like downloads)")
     p.add_argument("folder")
     structure_options(p)
+    dest = p.add_mutually_exclusive_group()
+    dest.add_argument("--dest", help="put organized files in this folder instead (e.g. on a USB drive)")
+    dest.add_argument("--here", action="store_true", help="put organized files back inside the folder itself")
+    names = p.add_mutually_exclusive_group()
+    names.add_argument("--rename", help="rename files as they move, e.g. '{date} {name}'")
+    names.add_argument("--keep-names", action="store_true", help="stop renaming files")
     p = folders.add_parser("remove")
     p.add_argument("folder")
 
@@ -65,6 +74,42 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("extensions", nargs="+")
     p = categories.add_parser("remove")
     p.add_argument("name")
+
+    report = sub.add_parser("report", help="save a preview or a past run as CSV or HTML").add_subparsers(
+        dest="action", required=True
+    )
+    p = report.add_parser("preview", help="what would move, without moving anything")
+    p.add_argument("folder", nargs="?")
+    p.add_argument("-o", "--output", required=True, help="file to write (.csv or .html)")
+    p = report.add_parser("run", help="what a past run moved (the latest one if no number is given)")
+    p.add_argument("run_id", nargs="?", type=int)
+    p.add_argument("-o", "--output", required=True, help="file to write (.csv or .html)")
+
+    p = sub.add_parser("stats", help="what's taking up space in a folder")
+    p.add_argument("folder", nargs="?")
+    p.add_argument("--months", type=int, default=6, help="count files not used in this many months")
+    p.add_argument("--top", type=int, default=10, help="how many of the largest files to list")
+
+    setup = sub.add_parser("setups", help="ready-made setups for students, freelancers...").add_subparsers(
+        dest="action", required=True
+    )
+    setup.add_parser("list")
+    p = setup.add_parser("apply")
+    p.add_argument("name", help="e.g. student, freelancer, photographer, music")
+
+    io = sub.add_parser("settings", help="export or import rules, categories and layouts").add_subparsers(
+        dest="action", required=True
+    )
+    for name in ("export", "import"):
+        p = io.add_parser(name)
+        p.add_argument("file")
+        p.add_argument("--only", nargs="+", choices=transfer.PARTS, help="just these parts")
+
+    p = sub.add_parser("where", help="where did this file come from?")
+    p.add_argument("file")
+
+    p = sub.add_parser("shell", help="File Explorer right-click menu (Windows)")
+    p.add_argument("action", choices=["on", "off", "status"])
     return parser
 
 
@@ -82,9 +127,15 @@ def main(argv: list[str] | None = None) -> int:
             "folders": cmd_folders,
             "structure": cmd_structure,
             "categories": cmd_categories,
+            "report": cmd_report,
+            "stats": cmd_stats,
+            "setups": cmd_setups,
+            "settings": cmd_settings,
+            "where": cmd_where,
+            "shell": cmd_shell,
         }[args.command]
         return handler(organizer, args)
-    except (PatternError, UnsafeFolderError, ValueError) as exc:
+    except (PatternError, UnsafeFolderError, ValueError, OSError) as exc:
         print(f"Error: {exc}")
         return 1
 
@@ -115,8 +166,22 @@ def cmd_folders(organizer: Organizer, args) -> int:
         folder = resolve_folder(args.folder)
         organizer.check(folder)  # refuse system folders up front
         profile = settings.add_folder(args.folder, _pattern_arg(args))
+        if args.dest:
+            destination = resolve_folder(args.dest)
+            ensure_destination(destination)
+            profile.destination = str(destination.resolve())
+        elif args.here:
+            profile.destination = None
+        if args.rename:
+            profile.rename = validate_name(args.rename)
+        elif args.keep_names:
+            profile.rename = None
         settings.save()
         print(f"Saved {profile.name} ({describe_pattern(profile.pattern or settings.pattern)}).")
+        if profile.destination:
+            print(f"Organized files go to {profile.target}.")
+        if profile.rename:
+            print(f"Files are renamed to: {profile.rename}")
         for warning in organizer.check(folder):
             print(f"Warning: {warning}")
     elif args.action == "remove":
@@ -168,6 +233,94 @@ def cmd_categories(organizer: Organizer, args) -> int:
     return 0
 
 
+def cmd_report(organizer: Organizer, args) -> int:
+    if args.action == "preview":
+        folder = resolve_folder(args.folder) if args.folder else _target_folders(organizer, args)[0]
+        pattern = organizer.pattern_for(folder)
+        report = reports.preview_report(folder, pattern, organizer.preview(folder))
+    else:
+        run_id = args.run_id
+        if run_id is None:
+            runs = organizer.history.runs(limit=1)
+            if not runs:
+                print("No runs yet.")
+                return 1
+            run_id = runs[0].id
+        report = reports.run_report(organizer.history, run_id)
+    saved = reports.save(report, Path(args.output))
+    print(f"Saved {len(report.rows)} file(s) to {saved}")
+    return 0
+
+
+def cmd_stats(organizer: Organizer, args) -> int:
+    folder = resolve_folder(args.folder) if args.folder else _target_folders(organizer, args)[0]
+    stats = collect(folder, organizer.settings.custom_categories, stale_days=args.months * 30, top=args.top)
+    print(f"\n{folder}: {format_size(stats.total_size)} in {stats.file_count:,} files")
+    print(f"Not used in {args.months} months: {format_size(stats.stale_size)} ({stats.stale_count:,} files)")
+    print("\nBy category:")
+    for name, total in stats.categories_by_size():
+        print(f"  {name:<14} {format_size(total.size):>10}  {total.count:>7,} files")
+    if stats.largest:
+        print(f"\nLargest {len(stats.largest)} files:")
+        for entry in stats.largest:
+            print(f"  {format_size(entry.size):>10}  {entry.path}")
+    return 0
+
+
+def cmd_setups(organizer: Organizer, args) -> int:
+    if args.action == "list":
+        for setup in setups.SETUPS:
+            print(f"{setup.key:<14} {setup.name}: {setup.summary}")
+        return 0
+    setup = setups.get(args.name)
+    if setup is None:
+        print(f"No setup called {args.name}. Try: {', '.join(s.key for s in setups.SETUPS)}")
+        return 1
+    summary = setup.apply(organizer.settings)
+    organizer.settings.save()
+    print(f"{setup.name} setup added.")
+    for line in summary.lines():
+        print(f"  {line}")
+    return 0
+
+
+def cmd_settings(organizer: Organizer, args) -> int:
+    parts = args.only or list(transfer.PARTS)
+    if args.action == "export":
+        saved = transfer.export_file(organizer.settings, Path(args.file), parts)
+        print(f"Saved to {saved}")
+        return 0
+    data = transfer.read_file(Path(args.file))
+    summary = transfer.apply(organizer.settings, data, parts)
+    organizer.settings.save()
+    for line in summary.lines():
+        print(line)
+    return 0
+
+
+def cmd_where(organizer: Organizer, args) -> int:
+    path = Path(args.file).expanduser().absolute()
+    origin = find_origin(path, organizer.history)
+    print(origin.summary())
+    for source, destination, when in origin.moves:
+        print(f"  {when:%Y-%m-%d %H:%M}  {source}  ->  {destination}")
+    if origin.download:
+        for label, url in (("Page", origin.download.referrer_url), ("File", origin.download.host_url)):
+            if url:
+                print(f"  {label}: {url}")
+    return 0
+
+
+def cmd_shell(organizer: Organizer, args) -> int:
+    if not shell.is_supported():
+        print("The File Explorer menu is only available on Windows.")
+        return 1
+    if args.action != "status":
+        shell.set_enabled(args.action == "on")
+    print("File Explorer menu: " + ("on" if shell.is_enabled() else "off"))
+    return 0
+
+
 # --- actions shared by commands and the menu ---------------------------------
 
 
@@ -177,7 +330,11 @@ def preview(organizer: Organizer, folder: Path, pattern: str | None = None) -> i
     print(f"\nPreview for {folder}  [{describe_pattern(pattern)}]")
     print("-" * 50)
     for move in moves:
-        print(f"{move.source.name} -> {move.relative_target.as_posix()}/")
+        renamed = f" (as {move.new_name})" if move.new_name else ""
+        where = move.relative_target.as_posix() + "/"
+        if move.root != folder:  # organized into another folder
+            where = f"{move.root}{os.sep}{where}"
+        print(f"{move.source.name} -> {where}{renamed}")
     print(f"Total files that would be organized: {len(moves)}")
     return 0
 
@@ -243,6 +400,10 @@ def print_tokens() -> None:
     for token, (description, sample) in TOKENS.items():
         print(f"  {{{token}}}".ljust(18) + f"{description}  (e.g. {sample})")
     print("Example: '{category}/{year}' or 'Sorted/{year}/{month_name}/{type}'")
+    print("\nWhen renaming (folders add --rename), you can also use:")
+    for token, (description, sample) in NAME_TOKENS.items():
+        print(f"  {{{token}}}".ljust(18) + f"{description}  (e.g. {sample})")
+    print("Example: '{date} {name}' turns IMG_1234.jpg into 2025-01-05 IMG_1234.jpg")
 
 
 def print_categories(organizer: Organizer) -> None:
@@ -388,9 +549,9 @@ def _pattern_arg(args) -> str | None:
 
 
 def _target_folders(organizer: Organizer, args) -> list[Path]:
-    if args.all:
+    if getattr(args, "all", False):
         return [f.location for f in organizer.settings.folders]
-    if args.folder:
+    if getattr(args, "folder", None):
         return [resolve_folder(args.folder)]
     return [organizer.settings.folders[0].location] if organizer.settings.folders else [resolve_folder("desktop")]
 
@@ -404,7 +565,12 @@ def _by_number(items: list, choice: str):
 
 def _print_run(result: RunResult, folder: Path) -> None:
     for source, destination in result.moved:
-        print(f"Moved: {source.name} -> {destination.parent.relative_to(folder).as_posix()}/")
+        try:
+            where = destination.parent.relative_to(folder).as_posix() + "/"
+        except ValueError:  # organized into another folder
+            where = str(destination.parent)
+        renamed = f" (as {destination.name})" if destination.name != source.name else ""
+        print(f"Moved: {source.name} -> {where}{renamed}")
     for source, reason in result.failed:
         print(f"Error processing {source.name}: {reason}")
     print("\nOrganization complete!")

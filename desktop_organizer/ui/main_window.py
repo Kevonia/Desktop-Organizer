@@ -34,23 +34,32 @@ from PySide6.QtWidgets import (
 )
 
 from desktop_organizer import APP_NAME, __version__
-from desktop_organizer.core import Organizer, PlannedMove
+from desktop_organizer.core import Organizer, PlannedMove, drives, reports, shell
 from desktop_organizer.core.auto import AutoOrganizer
 from desktop_organizer.core.config import AutoMode, FolderProfile
 from desktop_organizer.core.dates import file_date
 from desktop_organizer.core.history import UndoResult
 from desktop_organizer.core.logs import log, log_dir
 from desktop_organizer.core.mover import RunResult
-from desktop_organizer.core.paths import KNOWN_FOLDERS, known_folder, resolve_folder
-from desktop_organizer.core.safety import UnsafeFolderError
+from desktop_organizer.core.paths import KNOWN_FOLDERS, known_folder, resolve_folder, same_path
+from desktop_organizer.core.safety import DriveNotConnectedError, UnsafeFolderError, ensure_destination
 from desktop_organizer.core.updates import RELEASES_PAGE, UpdateError, UpdateInfo, check_for_update
 from desktop_organizer.ui import theme
 from desktop_organizer.ui.dialogs import (
     CategoriesDialog,
     HistoryDialog,
+    RenameDialog,
     SettingsDialog,
     StructureCombo,
+    save_report,
     section_label,
+)
+from desktop_organizer.ui.insights import (
+    OriginDialog,
+    SetupsDialog,
+    StatsDialog,
+    export_settings,
+    import_settings,
 )
 from desktop_organizer.ui.recover import FIND, RECYCLE, VERSIONS, RecoverDialog
 from desktop_organizer.ui.tools import DuplicatesDialog, RulesDialog
@@ -85,6 +94,7 @@ class MainWindow(QMainWindow):
         self.auto = AutoOrganizer(organizer)
         self.auto_task: Task | None = None
         self.auto_paused = False
+        self._drive_states: dict[str, str] = {}
         self._quitting = False
         self._told_about_tray = False
 
@@ -118,6 +128,7 @@ class MainWindow(QMainWindow):
         self.schedule_timer = QTimer(self)
         self.schedule_timer.setInterval(AUTO_CHECK_MS)
         self.schedule_timer.timeout.connect(self.run_auto)
+        self.schedule_timer.timeout.connect(self._check_drives)
         self.schedule_timer.start()
         QTimer.singleShot(5000, self.run_auto)
 
@@ -160,10 +171,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.add_folder_button)
 
         layout.addSpacing(8)
-        for text, slot in (("Find & recover", lambda: self.show_recover(FIND)),
+        for text, slot in (("Find && recover", lambda: self.show_recover(FIND)),
                            ("Rules", self.show_rules), ("Find duplicates", self.show_duplicates),
-                           ("History", self.show_history), ("Categories", self.show_categories),
-                           ("Settings", self.show_settings)):
+                           ("Storage stats", self.show_stats), ("History", self.show_history),
+                           ("Categories", self.show_categories), ("Settings", self.show_settings)):
             button = QPushButton(text)
             button.clicked.connect(slot)
             layout.addWidget(button)
@@ -215,6 +226,24 @@ class MainWindow(QMainWindow):
         structure_row.addStretch()
         layout.addLayout(structure_row)
 
+        target_row = QHBoxLayout()
+        target_row.addWidget(QLabel("Put files in"))
+        self.destination_button = QPushButton()
+        self.destination_button.setToolTip("Organize into this folder, or into another one, "
+                                           "e.g. on a USB drive or network folder")
+        self.destination_menu = QMenu(self)
+        self.destination_menu.aboutToShow.connect(self._fill_destination_menu)
+        self.destination_button.setMenu(self.destination_menu)
+        target_row.addWidget(self.destination_button)
+        target_row.addSpacing(16)
+        target_row.addWidget(QLabel("File names"))
+        self.rename_button = QPushButton()
+        self.rename_button.setToolTip("Rename files as they're organized, e.g. put the date first")
+        self.rename_button.clicked.connect(self.choose_rename)
+        target_row.addWidget(self.rename_button)
+        target_row.addStretch()
+        layout.addLayout(target_row)
+
         filter_row = QHBoxLayout()
         self.select_all = QCheckBox("Select all")
         self.select_all.setTristate(False)
@@ -259,7 +288,7 @@ class MainWindow(QMainWindow):
         self.status.setObjectName("Muted")
         footer.addWidget(self.status, 1)
         self.refresh_button = QPushButton("Refresh")
-        self.refresh_button.clicked.connect(self.refresh_preview)
+        self.refresh_button.clicked.connect(self.refresh_all)
         self.undo_button = QPushButton("Undo last run")
         self.undo_button.clicked.connect(self.undo_last)
         self.organize_button = QPushButton("Organize")
@@ -274,12 +303,17 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         self._action(file_menu, "Choose folder...", self.add_folder_from_dialog, QKeySequence.StandardKey.Open)
         file_menu.addSeparator()
+        self._action(file_menu, "Export settings...", lambda: export_settings(self.organizer, self))
+        self._action(file_menu, "Import settings...", self.import_settings)
+        file_menu.addSeparator()
         self._action(file_menu, "Quit", self.quit_app, QKeySequence("Ctrl+Q"))
 
         actions = self.menuBar().addMenu("&Actions")
         self._action(actions, "Refresh preview", self.refresh_preview, QKeySequence.StandardKey.Refresh)
         self._action(actions, "Organize", self.organize, QKeySequence("Ctrl+Return"))
         self._action(actions, "Undo last run", self.undo_last, QKeySequence.StandardKey.Undo)
+        actions.addSeparator()
+        self._action(actions, "Export preview...", self.export_preview, QKeySequence("Ctrl+E"))
 
         tools = self.menuBar().addMenu("&Tools")
         self._action(tools, "Find a file", lambda: self.show_recover(FIND), QKeySequence("Ctrl+F"))
@@ -288,8 +322,10 @@ class MainWindow(QMainWindow):
         tools.addSeparator()
         self._action(tools, "Rules", self.show_rules, QKeySequence("Ctrl+R"))
         self._action(tools, "Find duplicates", self.show_duplicates, QKeySequence("Ctrl+D"))
+        self._action(tools, "Storage stats", self.show_stats, QKeySequence("Ctrl+I"))
         self._action(tools, "History", self.show_history, QKeySequence("Ctrl+H"))
         self._action(tools, "Categories", self.show_categories)
+        self._action(tools, "Ready-made setups...", self.show_setups)
         self._action(tools, "Settings", self.show_settings, QKeySequence.StandardKey.Preferences)
 
         help_menu = self.menuBar().addMenu("&Help")
@@ -318,9 +354,15 @@ class MainWindow(QMainWindow):
         icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
         self.folder_list.blockSignals(True)
         self.folder_list.clear()
+        self._drive_states = {}
         for profile in self.settings.folders:
             auto = profile.auto is not AutoMode.OFF
-            item = QListWidgetItem(icon, f"{profile.name}  (auto)" if auto else profile.name)
+            state = self._folder_state(profile)
+            self._drive_states[profile.path] = state
+            text = profile.name + ("  (auto)" if auto else "")
+            if state != "ok":
+                text += "  (not connected)" if state == "offline" else "  (missing)"
+            item = QListWidgetItem(icon, text)
             item.setToolTip(str(profile.location) + (f"\nAuto-organize: {profile.auto.label}" if auto else ""))
             self.folder_list.addItem(item)
         self.folder_list.blockSignals(False)
@@ -328,6 +370,22 @@ class MainWindow(QMainWindow):
         if self.settings.folders:
             self.folder_list.setCurrentRow(min(max(current, 0), len(self.settings.folders) - 1))
         self._on_folder_selected(self.folder_list.currentRow())
+
+    @staticmethod
+    def _folder_state(profile: FolderProfile) -> str:
+        """'ok', 'offline' (its USB or network drive isn't there) or 'missing'."""
+        folder = profile.location
+        if not drives.is_connected(folder):
+            return "offline"
+        if profile.destination and not drives.is_connected(profile.target):
+            return "offline"
+        return "ok" if folder.is_dir() else "missing"
+
+    def _check_drives(self) -> None:
+        """Notice USB and network drives being plugged in or removed."""
+        states = {p.path: self._folder_state(p) for p in self.settings.folders}
+        if states != self._drive_states:
+            self._reload_folders()
 
     def _fill_add_menu(self) -> None:
         self.add_folder_menu.clear()
@@ -378,8 +436,9 @@ class MainWindow(QMainWindow):
             self.watcher.removePath(path)
         has_folder = profile is not None
         for widget in (self.structure_combo, self.auto_combo, self.open_button, self.remove_folder_button,
-                       self.refresh_button):
+                       self.refresh_button, self.destination_button, self.rename_button):
             widget.setEnabled(has_folder)
+        self._update_target_buttons()
         if not has_folder:
             self.title.setText("No folder selected")
             self.path_label.setText("Add a folder on the left to get started.")
@@ -389,11 +448,85 @@ class MainWindow(QMainWindow):
 
         folder = profile.location
         self.title.setText(profile.name)
-        self.path_label.setText(str(folder))
+        self.path_label.setText(str(folder) if not profile.destination
+                                else f"{folder}   \u2192   files go to {profile.target}")
         self.structure_combo.set_pattern(profile.pattern, folder)
         self.auto_combo.setCurrentIndex(self.auto_combo.findData(profile.auto.value))
         if folder.is_dir():
             self.watcher.addPath(str(folder))
+        self.refresh_preview()
+
+    def _update_target_buttons(self) -> None:
+        profile = self.current_profile
+        if profile is None:
+            self.destination_button.setText("This folder")
+            self.rename_button.setText("Keep names")
+            return
+        self.destination_button.setText(
+            f"Another folder: {profile.target.name or profile.target}" if profile.destination else "This folder")
+        self.rename_button.setText(f"Rename: {profile.rename}" if profile.rename else "Keep names")
+
+    def _fill_destination_menu(self) -> None:
+        self.destination_menu.clear()
+        profile = self.current_profile
+        if profile is None:
+            return
+        here = self.destination_menu.addAction("This folder (in subfolders)", lambda: self.set_destination(None))
+        here.setCheckable(True)
+        here.setChecked(not profile.destination)
+        if profile.destination:
+            current = self.destination_menu.addAction(str(profile.target))
+            current.setCheckable(True)
+            current.setChecked(True)
+            current.setEnabled(False)
+        self.destination_menu.addSeparator()
+        self.destination_menu.addAction("Choose another folder...", self.choose_destination)
+
+    def choose_destination(self) -> None:
+        profile = self.current_profile
+        if profile is None:
+            return
+        start = str(profile.target if profile.destination else profile.location)
+        path = QFileDialog.getExistingDirectory(self, "Where should organized files go?", start)
+        if path:
+            self.set_destination(path)
+
+    def set_destination(self, spec: str | None) -> bool:
+        """Send this folder's files somewhere else (None: back into the folder itself)."""
+        profile = self.current_profile
+        if profile is None:
+            return False
+        if spec is not None:
+            target = resolve_folder(spec)
+            if same_path(target, profile.location):
+                spec = None
+            else:
+                try:
+                    ensure_destination(target)
+                except UnsafeFolderError as exc:
+                    QMessageBox.critical(self, "Can't put files there", str(exc))
+                    return False
+                spec = str(target)
+        profile.destination = spec
+        self.settings.save()
+        self._reload_folders()
+        return True
+
+    def choose_rename(self) -> None:
+        profile = self.current_profile
+        if profile is None:
+            return
+        dialog = RenameDialog(self.organizer, profile.location, profile.rename, self)
+        if dialog.exec():
+            self.set_rename(dialog.template())
+
+    def set_rename(self, template: str | None) -> None:
+        profile = self.current_profile
+        if profile is None:
+            return
+        profile.rename = template
+        self.settings.save()
+        self._update_target_buttons()
         self.refresh_preview()
 
     def _on_structure_chosen(self, pattern: str | None) -> None:
@@ -406,6 +539,12 @@ class MainWindow(QMainWindow):
 
     # --- preview -----------------------------------------------------------------
 
+    def refresh_all(self) -> None:
+        """Refresh button: look again for drives that were plugged in, then rebuild the preview."""
+        drives.forget()
+        self._check_drives()
+        self.refresh_preview()
+
     def refresh_preview(self) -> None:
         profile = self.current_profile
         if profile is None or self._busy():
@@ -414,6 +553,10 @@ class MainWindow(QMainWindow):
         self.warning.hide()
         try:
             warnings = self.organizer.check(folder)
+        except DriveNotConnectedError as exc:
+            self._set_warning(str(exc))
+            self._show_moves([], empty_text="Waiting for the drive to be connected.")
+            return
         except UnsafeFolderError as exc:
             self._set_warning(str(exc))
             self._show_moves([], empty_text="This folder can't be organized.")
@@ -421,14 +564,23 @@ class MainWindow(QMainWindow):
         if warnings:
             self._set_warning(" ".join(warnings))
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        empty_text = None
         try:
             moves = self.organizer.preview(folder)
+        except DriveNotConnectedError as exc:
+            moves = []
+            self._set_warning(f"Files from here go to {profile.target}. {exc}")
+            empty_text = "Waiting for the destination drive to be connected."
+        except UnsafeFolderError as exc:
+            moves = []
+            self._set_warning(str(exc))
+            empty_text = "Choose another place to put the files."
         except OSError as exc:
             moves = []
             self._set_warning(f"Couldn't read this folder: {exc.strerror or exc}")
         finally:
             QApplication.restoreOverrideCursor()
-        self._show_moves(moves)
+        self._show_moves(moves, empty_text=empty_text)
 
     def _auto_refresh(self) -> None:
         if not self._busy() and self.isVisible():
@@ -446,7 +598,8 @@ class MainWindow(QMainWindow):
             item.setData(COL_FILE, MOVE_ROLE, index)
             item.setText(COL_FILE, move.source.name)
             item.setToolTip(COL_FILE, str(move.source))
-            item.setText(COL_TARGET, move.relative_target.as_posix() + "/")
+            item.setText(COL_TARGET, _target_text(move))
+            item.setToolTip(COL_TARGET, str(move.target_dir / move.target_name))
             item.setText(COL_RULE, move.rule or "")
             try:
                 st = move.source.stat()
@@ -531,6 +684,7 @@ class MainWindow(QMainWindow):
         folder = profile.location
         try:
             warnings = self.organizer.check(folder)
+            self.organizer.check_destination(folder)
         except UnsafeFolderError as exc:
             QMessageBox.critical(self, "Can't organize this folder", str(exc))
             return
@@ -616,7 +770,8 @@ class MainWindow(QMainWindow):
     def _set_controls_enabled(self, enabled: bool) -> None:
         for widget in (self.folder_list, self.add_folder_button, self.remove_folder_button,
                        self.structure_combo, self.refresh_button, self.undo_button,
-                       self.organize_button, self.tree, self.select_all):
+                       self.organize_button, self.tree, self.select_all,
+                       self.destination_button, self.rename_button):
             widget.setEnabled(enabled)
 
     # --- dialogs (overridable in tests) -------------------------------------------
@@ -666,6 +821,56 @@ class MainWindow(QMainWindow):
         folder = self.current_profile.location if self.current_profile else None
         DuplicatesDialog(self.organizer, folder, self).exec()
         self.refresh_preview()
+
+    def show_stats(self) -> None:
+        folder = self.current_profile.location if self.current_profile else None
+        StatsDialog(self.organizer, folder if folder and folder.is_dir() else None, self).exec()
+
+    def show_setups(self, welcome: bool = False) -> None:
+        if SetupsDialog(self.organizer, welcome=welcome, parent=self).exec():
+            self._reload_folders()
+
+    def show_welcome(self) -> None:
+        """First launch: offer the ready-made setups once."""
+        self.settings.welcome_shown = True
+        self.settings.save()
+        self.show_setups(welcome=True)
+
+    def import_settings(self) -> None:
+        if import_settings(self.organizer, self) is not None:
+            self._reload_folders()
+
+    def export_preview(self) -> None:
+        profile = self.current_profile
+        moves = self.checked_moves()
+        if profile is None or not moves:
+            QMessageBox.information(self, "Export preview", "There's nothing in the preview to export.")
+            return
+        report = reports.preview_report(profile.location, self.organizer.pattern_for(profile.location), moves)
+        save_report(self, report, f"{profile.name} preview {datetime.now():%Y-%m-%d}")
+
+    def show_origin(self, path: Path) -> None:
+        OriginDialog(self.organizer, path, self).exec()
+
+    def handle_message(self, message: str) -> None:
+        """A request from another launch, e.g. the File Explorer menu: 'organize<TAB>path'."""
+        command, _, value = message.partition("\t")
+        self.show_window()
+        if not value:
+            return
+        path = Path(value)
+        if command == shell.ORGANIZE_FLAG.lstrip("-"):
+            self.open_folder(path)
+        elif command == shell.WHERE_FLAG.lstrip("-"):
+            self.show_origin(path)
+
+    def open_folder(self, path: Path) -> bool:
+        """Show the preview for ``path``, adding it to the list first if needed. Nothing moves yet."""
+        existing = self.settings.find_folder(path)
+        if existing is not None:
+            self.folder_list.setCurrentRow(self.settings.folders.index(existing))
+            return True
+        return self.add_folder(str(path))
 
     def show_history(self) -> None:
         dialog = HistoryDialog(self.organizer, self)
@@ -872,6 +1077,16 @@ class MainWindow(QMainWindow):
                                   QSystemTrayIcon.MessageIcon.Information, 5000)
         self.refresh_preview()
         self._update_undo()
+
+
+def _target_text(move: PlannedMove) -> str:
+    """'2025/03-March/' or, when renamed, '2025/03-March/2025-03-14 photo.jpg'."""
+    text = move.relative_target.as_posix() + "/"
+    if not same_path(move.root, move.source.parent):
+        text = f"{move.root.name or move.root}/{text}"
+    if move.new_name:
+        text += move.new_name
+    return text
 
 
 def _format_size(size: int) -> str:

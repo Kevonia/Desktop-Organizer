@@ -50,5 +50,13 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
+[Registry]
+; The app adds these File Explorer menu entries when the user turns them on in Settings.
+; Listed here only so uninstalling removes them; installing doesn't create them.
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\DesktopOrganizer.Organize"; Flags: uninsdeletekey dontcreatekey
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\DesktopOrganizer.Organize"; Flags: uninsdeletekey dontcreatekey
+Root: HKCU; Subkey: "Software\Classes\Drive\shell\DesktopOrganizer.Organize"; Flags: uninsdeletekey dontcreatekey
+Root: HKCU; Subkey: "Software\Classes\*\shell\DesktopOrganizer.WhereFrom"; Flags: uninsdeletekey dontcreatekey
+
 ; Settings and the undo history in %APPDATA%\DesktopOrganizer are kept on uninstall,
 ; so reinstalling keeps the user's folders and lets them undo earlier runs.

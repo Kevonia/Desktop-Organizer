@@ -131,6 +131,38 @@ class History:
                 break
         return results
 
+    def moves_for_run(self, run_id: int) -> list[tuple[Path, Path, bool]]:
+        """Every move in a run, in order: (source, destination, undone)."""
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT source, destination, undone FROM moves WHERE run_id = ? ORDER BY id", (run_id,)
+            ).fetchall()
+        return [(Path(r["source"]), Path(r["destination"]), bool(r["undone"])) for r in rows]
+
+    def trail(self, path: Path, max_hops: int = 20) -> list[tuple[Path, Path, datetime]]:
+        """How the organizer moved a file to ``path``, oldest move first: (source, destination, when).
+
+        Empty if the organizer didn't put the file there (or that move was undone).
+        """
+        hops: list[tuple[Path, Path, datetime]] = []
+        target, before = str(path), None
+        with closing(self._connect()) as conn:
+            for _ in range(max_hops):
+                row = conn.execute(
+                    """SELECT m.id, m.source, m.destination, r.started_at
+                       FROM moves m JOIN runs r ON r.id = m.run_id
+                       WHERE m.destination = ? COLLATE NOCASE AND m.undone = 0
+                         AND (? IS NULL OR m.id < ?)
+                       ORDER BY m.id DESC LIMIT 1""",
+                    (target, before, before),
+                ).fetchone()
+                if row is None:
+                    break
+                hops.append((Path(row["source"]), Path(row["destination"]),
+                             datetime.fromisoformat(row["started_at"])))
+                target, before = row["source"], row["id"]
+        return list(reversed(hops))
+
     def last_run_time(self, folder: Path) -> datetime | None:
         """When ``folder`` was last organized (manually or automatically)."""
         return next((r.started_at for r in self.runs(limit=200) if same_path(r.folder, folder)), None)
